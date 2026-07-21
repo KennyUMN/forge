@@ -196,4 +196,60 @@ describe("AnthropicProvider", () => {
       { type: "finish", reason: "completed", rawReason: "end_turn" },
     ]);
   });
+
+  // PROVISIONAL: this exercises the full thinking-enabled request+response shape
+  // against a fake client built to mirror Anthropic's documented wire format (request
+  // `thinking: { type: "enabled", budget_tokens }`, streamed `thinking_delta` events,
+  // and a `thinking` content block in the final message). The installed SDK predates
+  // Extended Thinking, so this is not verified against the real SDK's types or a live
+  // response -- see the PROVISIONAL comment in anthropic-provider.ts and Task 4 Step 7
+  // in the Sprint 1 plan for the pending manual verification against the real API.
+  it("exercises the full thinking-enabled request+response shape end-to-end", async () => {
+    let capturedParams: unknown;
+    const finalMessage = {
+      stop_reason: "end_turn",
+      content: [
+        { type: "thinking", thinking: "Considering the request...", signature: "sig_abc123" },
+        { type: "text", text: "Hi!" },
+      ],
+    };
+    const client = {
+      messages: {
+        stream: (params: unknown) => {
+          capturedParams = params;
+          return {
+            [Symbol.asyncIterator]: async function* () {
+              yield { type: "content_block_delta", delta: { type: "thinking_delta", thinking: "Considering the request..." } };
+              yield { type: "content_block_delta", delta: { type: "text_delta", text: "Hi!" } };
+            },
+            finalMessage: async () => finalMessage,
+          };
+        },
+      },
+    } as unknown as Anthropic;
+
+    const provider = new AnthropicProvider({ apiKey: "test", model: "claude-test" }, client).withThinking("high");
+
+    const events = [];
+    for await (const event of provider.stream({ systemPrompt: "", messages: [], tools: [] })) {
+      events.push(event);
+    }
+
+    // The request carries the right budget_tokens for "high" and a max_tokens
+    // comfortably above it.
+    expect(capturedParams).toMatchObject({
+      thinking: { type: "enabled", budget_tokens: 16_384 },
+    });
+    const { max_tokens } = capturedParams as { max_tokens: number };
+    expect(max_tokens).toBeGreaterThan(16_384);
+
+    // The streamed thinking_delta surfaces as its own event, and the finalMessage's
+    // `thinking` content block (mirroring the real API's shape) is consumed without
+    // being misrouted into the tool_call handling path.
+    expect(events).toEqual([
+      { type: "thinking_delta", text: "Considering the request..." },
+      { type: "text_delta", text: "Hi!" },
+      { type: "finish", reason: "completed", rawReason: "end_turn" },
+    ]);
+  });
 });

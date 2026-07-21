@@ -8,6 +8,13 @@ type AnthropicStreamParams = Parameters<Anthropic["messages"]["stream"]>[0];
 // neither its request params nor its stream delta types model `thinking`. These
 // field names match Anthropic's public API contract; they're modeled locally and
 // merged in via permissive casts rather than widening the public SDK types.
+//
+// PROVISIONAL: because the installed SDK doesn't model this API, this wiring is
+// only exercised against a hand-rolled fake client built to mirror the documented
+// wire shape (see "exercises the full thinking-enabled request+response shape" in
+// test/provider/anthropic-provider.test.ts) -- never against the real SDK's actual
+// types or a live response. Treat this path as unverified until it has been run
+// against a real Anthropic API call (Sprint 1 plan, Task 4 Step 7).
 interface AnthropicThinkingConfig {
   type: "enabled";
   budget_tokens: number;

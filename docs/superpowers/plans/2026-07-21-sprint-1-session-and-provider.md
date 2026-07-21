@@ -761,13 +761,31 @@ for await (const event of provider.stream({ systemPrompt: 'Be brief.', messages:
 
 Expected: several `text_delta` events followed by one `finish` event with `reason: "completed"`.
 
+- [ ] **Step 7b (manual, gated on having a real API key and an SDK version that models Extended Thinking): smoke-test the thinking-enabled path against the real Anthropic API**
+
+The installed `@anthropic-ai/sdk` (0.32.1) predates the Extended Thinking API, so the `thinking` request param and `thinking_delta`/`thinking` response shapes in `anthropic-provider.ts` are modeled locally from Anthropic's public docs and merged in via permissive casts (see the `PROVISIONAL` comment above `AnthropicThinkingConfig`) — they have only ever been exercised against a hand-rolled fake client, never the real API. Before Sprint 2 or any production code relies on `withThinking()`, run this by hand (upgrading the SDK first if needed):
+
+```bash
+ANTHROPIC_API_KEY=sk-... node --experimental-strip-types -e "
+import { AnthropicProvider } from './src/provider/anthropic-provider.ts';
+const provider = new AnthropicProvider({ apiKey: process.env.ANTHROPIC_API_KEY, model: 'claude-sonnet-4-5' }).withThinking('low');
+for await (const event of provider.stream({ systemPrompt: 'Be brief.', messages: [{ role: 'user', content: [{ type: 'text', text: 'Say hi in 3 words.' }] }], tools: [] })) {
+  console.log(event);
+}
+"
+```
+
+Expected: one or more `thinking_delta` events, followed by `text_delta` events, followed by one `finish` event with `reason: "completed"`. Confirm the real response shape matches what `AnthropicThinkingConfig`/`ThinkingDeltaEvent` assume; adjust the conversion helpers (not the public `AnthropicProvider` shape) if it doesn't, and remove the `PROVISIONAL` comment once confirmed.
+
 ---
 
 ## Sprint 1 Definition of Done
 
-- [ ] All 12 automated tests across Tasks 1–4 pass (`npm test`).
+- [ ] All automated tests across Tasks 1–4 pass (`npm test`).
 - [ ] `npm run typecheck` reports no errors.
+- [ ] `npm run typecheck:test` (type-checks `test/` alongside `src/`) reports no errors.
 - [ ] The manual smoke test (Task 4, Step 7) has been run at least once against the real API.
+- [ ] The manual thinking-path smoke test (Task 4, Step 7b) has been run at least once against the real API before `withThinking()` is relied on in production.
 - [ ] A session directory killed mid-write (simulate by killing the process during a burst of `append()` calls) reloads with only the torn entry missing — worth a quick manual check beyond the unit test, since the unit test only simulates the torn line, not an actual process kill.
 
 Once this Definition of Done is met, move to Sprint 2 (Agent Loop + Permission Gate) — see [ROADMAP.md](../../ROADMAP.md).
