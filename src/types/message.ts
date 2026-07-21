@@ -36,5 +36,6 @@ export type FinishReason = "completed" | "tool_calls" | "truncated" | "filtered"
 
 export type StreamEvent =
   | { type: "text_delta"; text: string }
+  | { type: "thinking_delta"; text: string }
   | { type: "tool_call"; id: string; name: string; input: unknown }
   | { type: "finish"; reason: FinishReason; rawReason: string };

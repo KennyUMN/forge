@@ -82,4 +82,103 @@ describe("AnthropicProvider", () => {
     expect(withThinking).not.toBe(provider);
     expect(withTokens.name).toBe("anthropic");
   });
+
+  it("maps a null stop_reason to other with a raw reason of unknown", async () => {
+    const client = fakeAnthropicClient([], { stop_reason: null, content: [] });
+    const provider = new AnthropicProvider({ apiKey: "test", model: "claude-test" }, client);
+
+    const events = [];
+    for await (const event of provider.stream({ systemPrompt: "", messages: [], tools: [] })) {
+      events.push(event);
+    }
+
+    expect(events).toEqual([{ type: "finish", reason: "other", rawReason: "unknown" }]);
+  });
+
+  it("propagates an error thrown while iterating the underlying stream", async () => {
+    const client = {
+      messages: {
+        stream: () => ({
+          [Symbol.asyncIterator]: async function* () {
+            throw new Error("stream failed");
+          },
+          finalMessage: async () => ({ stop_reason: "end_turn", content: [] }),
+        }),
+      },
+    } as unknown as Anthropic;
+    const provider = new AnthropicProvider({ apiKey: "test", model: "claude-test" }, client);
+
+    await expect(async () => {
+      for await (const _event of provider.stream({ systemPrompt: "", messages: [], tools: [] })) {
+        // drain until the error surfaces
+      }
+    }).rejects.toThrow("stream failed");
+  });
+
+  it("does not include a thinking config in the request when thinkingEffort is unset", async () => {
+    let capturedParams: unknown;
+    const client = {
+      messages: {
+        stream: (params: unknown) => {
+          capturedParams = params;
+          return {
+            [Symbol.asyncIterator]: async function* () {},
+            finalMessage: async () => ({ stop_reason: "end_turn", content: [] }),
+          };
+        },
+      },
+    } as unknown as Anthropic;
+    const provider = new AnthropicProvider({ apiKey: "test", model: "claude-test" }, client);
+
+    const events = [];
+    for await (const event of provider.stream({ systemPrompt: "", messages: [], tools: [] })) {
+      events.push(event);
+    }
+
+    expect(capturedParams).not.toHaveProperty("thinking");
+  });
+
+  it("wires withThinking(effort) into an enabled thinking config on the outgoing request", async () => {
+    let capturedParams: unknown;
+    const client = {
+      messages: {
+        stream: (params: unknown) => {
+          capturedParams = params;
+          return {
+            [Symbol.asyncIterator]: async function* () {},
+            finalMessage: async () => ({ stop_reason: "end_turn", content: [] }),
+          };
+        },
+      },
+    } as unknown as Anthropic;
+    const base = new AnthropicProvider({ apiKey: "test", model: "claude-test" }, client);
+    const provider = base.withThinking("high");
+
+    const events = [];
+    for await (const event of provider.stream({ systemPrompt: "", messages: [], tools: [] })) {
+      events.push(event);
+    }
+
+    expect(capturedParams).toMatchObject({
+      thinking: { type: "enabled", budget_tokens: expect.any(Number) },
+    });
+  });
+
+  it("surfaces thinking_delta stream events as thinking_delta StreamEvents", async () => {
+    const client = fakeAnthropicClient(
+      [{ type: "content_block_delta", delta: { type: "thinking_delta", thinking: "Considering..." } }],
+      { stop_reason: "end_turn", content: [] },
+    );
+    const provider = new AnthropicProvider({ apiKey: "test", model: "claude-test" }, client);
+
+    const events = [];
+    for await (const event of provider.stream({ systemPrompt: "", messages: [], tools: [] })) {
+      events.push(event);
+    }
+
+    expect(events).toEqual([
+      { type: "thinking_delta", text: "Considering..." },
+      { type: "finish", reason: "completed", rawReason: "end_turn" },
+    ]);
+  });
 });

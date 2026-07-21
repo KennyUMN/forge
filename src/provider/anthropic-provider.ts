@@ -4,12 +4,39 @@ import type { FinishReason, StreamEvent, ThinkingEffort } from "../types/message
 
 type AnthropicStreamParams = Parameters<Anthropic["messages"]["stream"]>[0];
 
+// The installed @anthropic-ai/sdk version predates the Extended Thinking API, so
+// neither its request params nor its stream delta types model `thinking`. These
+// field names match Anthropic's public API contract; they're modeled locally and
+// merged in via permissive casts rather than widening the public SDK types.
+interface AnthropicThinkingConfig {
+  type: "enabled";
+  budget_tokens: number;
+}
+
+interface ThinkingDeltaEvent {
+  type: "thinking_delta";
+  thinking: string;
+}
+
+const DEFAULT_MAX_TOKENS = 4096;
+
+const THINKING_BUDGET_TOKENS: Record<Exclude<ThinkingEffort, "none">, number> = {
+  low: 4_096,
+  high: 16_384,
+  max: 32_768,
+};
+
 const FINISH_REASON_MAP: Record<string, FinishReason> = {
   end_turn: "completed",
   tool_use: "tool_calls",
   max_tokens: "truncated",
   stop_sequence: "completed",
 };
+
+function toAnthropicThinking(effort: ThinkingEffort | undefined): AnthropicThinkingConfig | undefined {
+  if (effort === undefined || effort === "none") return undefined;
+  return { type: "enabled", budget_tokens: THINKING_BUDGET_TOKENS[effort] };
+}
 
 function mapFinishReason(rawReason: string | null): FinishReason {
   if (rawReason === null) return "other";
@@ -35,19 +62,26 @@ export class AnthropicProvider implements ModelProvider {
   }
 
   async *stream(context: StreamContext): AsyncIterable<StreamEvent> {
+    const thinking = toAnthropicThinking(this.options.thinkingEffort);
     const params = {
       model: this.options.model,
-      max_tokens: this.options.maxTokens ?? 4096,
+      max_tokens: this.options.maxTokens ?? DEFAULT_MAX_TOKENS,
       system: context.systemPrompt,
       messages: toAnthropicMessages(context.messages),
       tools: toAnthropicTools(context.tools),
+      ...(thinking ? { thinking } : {}),
     } as AnthropicStreamParams;
 
     const anthropicStream = this.client.messages.stream(params);
 
     for await (const event of anthropicStream) {
-      if (event.type === "content_block_delta" && event.delta.type === "text_delta") {
-        yield { type: "text_delta", text: event.delta.text };
+      if (event.type === "content_block_delta") {
+        const delta = event.delta as typeof event.delta | ThinkingDeltaEvent;
+        if (delta.type === "text_delta") {
+          yield { type: "text_delta", text: delta.text };
+        } else if (delta.type === "thinking_delta") {
+          yield { type: "thinking_delta", text: delta.thinking };
+        }
       }
     }
 
