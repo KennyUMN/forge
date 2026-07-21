@@ -122,11 +122,11 @@ export class AnthropicProvider implements ModelProvider {
     };
   }
 
-  withThinking(effort: ThinkingEffort): ModelProvider {
+  withThinking(effort: ThinkingEffort): AnthropicProvider {
     return new AnthropicProvider({ ...this.options, thinkingEffort: effort }, this.client);
   }
 
-  withMaxTokens(max: number): ModelProvider {
+  withMaxTokens(max: number): AnthropicProvider {
     return new AnthropicProvider({ ...this.options, maxTokens: max }, this.client);
   }
 }
