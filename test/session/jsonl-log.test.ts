@@ -45,4 +45,23 @@ describe("jsonl-log", () => {
       { id: "2", value: "b" },
     ]);
   });
+
+  it("recovers from a torn line so entries appended after a crash are not lost", async () => {
+    await appendJsonlEntry(filePath, { id: "1", value: "a" });
+    await appendJsonlEntry(filePath, { id: "2", value: "b" });
+    // simulate a crash mid-write: a truncated JSON line with no trailing newline
+    await appendFile(filePath, '{"id":"3","value":"unterm', "utf8");
+
+    // simulate the process resuming after the crash and continuing to append
+    await appendJsonlEntry(filePath, { id: "4", value: "d" });
+    await appendJsonlEntry(filePath, { id: "5", value: "e" });
+
+    const entries = await readJsonlEntries<{ id: string; value: string }>(filePath);
+    expect(entries).toEqual([
+      { id: "1", value: "a" },
+      { id: "2", value: "b" },
+      { id: "4", value: "d" },
+      { id: "5", value: "e" },
+    ]);
+  });
 });
