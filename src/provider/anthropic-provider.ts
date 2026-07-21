@@ -20,6 +20,10 @@ interface ThinkingDeltaEvent {
 
 const DEFAULT_MAX_TOKENS = 4096;
 
+// Provisional budgets: the brief specifies the `ThinkingEffort` type but not concrete
+// token counts, so these are our own reasonable defaults, not a brief/spec requirement.
+// Anthropic's Extended Thinking API requires `max_tokens` to strictly exceed
+// `thinking.budget_tokens` — see `resolveMaxTokens()`, which enforces that invariant.
 const THINKING_BUDGET_TOKENS: Record<Exclude<ThinkingEffort, "none">, number> = {
   low: 4_096,
   high: 16_384,
@@ -36,6 +40,25 @@ const FINISH_REASON_MAP: Record<string, FinishReason> = {
 function toAnthropicThinking(effort: ThinkingEffort | undefined): AnthropicThinkingConfig | undefined {
   if (effort === undefined || effort === "none") return undefined;
   return { type: "enabled", budget_tokens: THINKING_BUDGET_TOKENS[effort] };
+}
+
+// Anthropic's Extended Thinking API rejects requests where `max_tokens` does not
+// strictly exceed `thinking.budget_tokens`. When the caller never set an explicit
+// `maxTokens`, auto-size it above the thinking budget (leaving `DEFAULT_MAX_TOKENS`
+// worth of room for the actual response) so `withThinking(effort)` alone — the most
+// natural call pattern — produces a valid request. When the caller did set an
+// explicit `maxTokens` that's too small for the configured budget, fail fast with a
+// clear error instead of silently sending an invalid request to the API.
+function resolveMaxTokens(explicitMaxTokens: number | undefined, thinking: AnthropicThinkingConfig | undefined): number {
+  if (!thinking) return explicitMaxTokens ?? DEFAULT_MAX_TOKENS;
+  if (explicitMaxTokens === undefined) return thinking.budget_tokens + DEFAULT_MAX_TOKENS;
+  if (explicitMaxTokens <= thinking.budget_tokens) {
+    throw new Error(
+      `max_tokens (${explicitMaxTokens}) must be greater than thinking.budget_tokens (${thinking.budget_tokens}); ` +
+        `call withMaxTokens() with a larger value or use a lower thinking effort.`,
+    );
+  }
+  return explicitMaxTokens;
 }
 
 function mapFinishReason(rawReason: string | null): FinishReason {
@@ -65,7 +88,7 @@ export class AnthropicProvider implements ModelProvider {
     const thinking = toAnthropicThinking(this.options.thinkingEffort);
     const params = {
       model: this.options.model,
-      max_tokens: this.options.maxTokens ?? DEFAULT_MAX_TOKENS,
+      max_tokens: resolveMaxTokens(this.options.maxTokens, thinking),
       system: context.systemPrompt,
       messages: toAnthropicMessages(context.messages),
       tools: toAnthropicTools(context.tools),

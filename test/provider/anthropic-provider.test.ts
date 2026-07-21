@@ -138,7 +138,7 @@ describe("AnthropicProvider", () => {
     expect(capturedParams).not.toHaveProperty("thinking");
   });
 
-  it("wires withThinking(effort) into an enabled thinking config on the outgoing request", async () => {
+  it("wires withThinking(effort) into an enabled thinking config on the outgoing request, with max_tokens auto-raised above the thinking budget", async () => {
     let capturedParams: unknown;
     const client = {
       messages: {
@@ -162,6 +162,21 @@ describe("AnthropicProvider", () => {
     expect(capturedParams).toMatchObject({
       thinking: { type: "enabled", budget_tokens: expect.any(Number) },
     });
+    const { thinking, max_tokens } = capturedParams as { thinking: { budget_tokens: number }; max_tokens: number };
+    expect(max_tokens).toBeGreaterThan(thinking.budget_tokens);
+  });
+
+  it("throws a clear error when an explicit maxTokens does not exceed the configured thinking budget", async () => {
+    const client = fakeAnthropicClient([], { stop_reason: "end_turn", content: [] });
+    const provider = new AnthropicProvider({ apiKey: "test", model: "claude-test" }, client)
+      .withThinking("high")
+      .withMaxTokens(8192);
+
+    await expect(async () => {
+      for await (const _event of provider.stream({ systemPrompt: "", messages: [], tools: [] })) {
+        // should throw before yielding anything
+      }
+    }).rejects.toThrow(/max_tokens.*must be greater than.*budget_tokens/);
   });
 
   it("surfaces thinking_delta stream events as thinking_delta StreamEvents", async () => {
