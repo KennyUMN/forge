@@ -60,6 +60,12 @@ describe("grepTool", () => {
     ).resolves.toEqual(expect.objectContaining({ isError: true }));
   });
 
+  it("returns an error result instead of throwing when path is the wrong type", async () => {
+    await expect(
+      grepTool.execute({ pattern: "function foo", path: 123 }, { cwd: dir }),
+    ).resolves.toEqual(expect.objectContaining({ isError: true }));
+  });
+
   it("returns an error result instead of throwing when input is null or undefined", async () => {
     await expect(grepTool.execute(null, { cwd: dir })).resolves.toEqual(
       expect.objectContaining({ isError: true }),

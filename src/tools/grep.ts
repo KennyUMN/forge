@@ -41,6 +41,9 @@ async function execute(input: unknown, context: ToolExecutionContext): Promise<T
   if (typeof pattern !== "string") {
     return { output: `Invalid input: "pattern" must be a string.`, isError: true };
   }
+  if (path !== undefined && typeof path !== "string") {
+    return { output: `Invalid input: "path" must be a string.`, isError: true };
+  }
   const root = resolveSearchRoot(path, context.cwd);
 
   let regex: RegExp;

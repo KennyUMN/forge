@@ -61,4 +61,10 @@ describe("globTool", () => {
       expect.objectContaining({ isError: true }),
     );
   });
+
+  it("returns an error result instead of throwing when path is the wrong type", async () => {
+    await expect(
+      globTool.execute({ pattern: "**/*.ts", path: 123 }, { cwd: dir }),
+    ).resolves.toEqual(expect.objectContaining({ isError: true }));
+  });
 });
