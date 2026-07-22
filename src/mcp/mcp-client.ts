@@ -58,7 +58,17 @@ export async function connectMcpServer(config: McpServerConfig): Promise<McpConn
   const client = new Client({ name: "forge", version: "0.1.0" }, { capabilities: {} });
   await client.connect(transport);
 
-  const { tools: mcpTools } = await client.listTools();
+  // Once connect() succeeds, the child process is running. If anything below
+  // fails (e.g. listTools() rejecting), we must close the client/transport
+  // ourselves before propagating the error -- otherwise the caller never
+  // receives a handle to close it and the subprocess leaks until process exit.
+  let mcpTools: Awaited<ReturnType<Client["listTools"]>>["tools"];
+  try {
+    ({ tools: mcpTools } = await client.listTools());
+  } catch (err) {
+    await client.close();
+    throw err;
+  }
   const tools = mcpTools.map((mcpTool) => toForgeTool(client, mcpTool));
 
   return {
@@ -72,8 +82,19 @@ export async function loadMcpServerIntoRegistry(
   config: McpServerConfig,
 ): Promise<{ close(): Promise<void> }> {
   const connection = await connectMcpServer(config);
-  for (const tool of connection.tools) {
-    registry.registerTool(tool);
+  try {
+    for (const tool of connection.tools) {
+      registry.registerTool(tool);
+    }
+  } catch (err) {
+    // registerTool() throws on the first name collision, leaving the tools
+    // registered before it in place and the connection open. Close the
+    // connection (and thus the spawned subprocess) before re-throwing so the
+    // caller -- who never receives a { close } handle on this path -- isn't
+    // left with a leaked child process. The partial registration and the
+    // thrown error itself are intentional (see ToolRegistry.registerTool).
+    await connection.close();
+    throw err;
   }
   return { close: connection.close };
 }

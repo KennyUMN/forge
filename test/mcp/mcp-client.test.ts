@@ -1,5 +1,7 @@
-import { describe, it, expect, afterEach } from "vitest";
+import { describe, it, expect, afterEach, vi } from "vitest";
 import { fileURLToPath } from "node:url";
+import { Client } from "@modelcontextprotocol/sdk/client/index.js";
+import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
 import { connectMcpServer, loadMcpServerIntoRegistry } from "../../src/mcp/mcp-client.js";
 import { ToolRegistry } from "../../src/tool/tool-registry.js";
 
@@ -45,6 +47,24 @@ describe("connectMcpServer", () => {
     expect(result.isError).toBe(true);
     expect(result.output).toContain("fixture_echo");
   });
+
+  it("closes the spawned subprocess instead of leaking it when listTools() rejects after connect", async () => {
+    const closeSpy = vi.spyOn(StdioClientTransport.prototype, "close");
+    const listToolsSpy = vi
+      .spyOn(Client.prototype, "listTools")
+      .mockRejectedValueOnce(new Error("simulated listTools failure"));
+
+    try {
+      await expect(
+        connectMcpServer({ name: "fixture", command: "node", args: [fixtureServerPath] }),
+      ).rejects.toThrow(/simulated listTools failure/);
+
+      expect(closeSpy).toHaveBeenCalledTimes(1);
+    } finally {
+      listToolsSpy.mockRestore();
+      closeSpy.mockRestore();
+    }
+  });
 });
 
 describe("loadMcpServerIntoRegistry", () => {
@@ -62,5 +82,29 @@ describe("loadMcpServerIntoRegistry", () => {
     expect(tool).toBeDefined();
     const result = await tool!.execute({ text: "hi" }, { cwd: "/tmp" });
     expect(result).toEqual({ output: "echo: hi", isError: false });
+  });
+
+  it("closes the connection instead of leaking the subprocess when a tool name collision throws during registration", async () => {
+    const registry = new ToolRegistry();
+    registry.registerTool({
+      name: "fixture_echo",
+      description: "pre-existing tool with a colliding name",
+      parameters: {},
+      async execute() {
+        return { output: "pre-existing", isError: false };
+      },
+    });
+
+    const closeSpy = vi.spyOn(StdioClientTransport.prototype, "close");
+
+    try {
+      await expect(
+        loadMcpServerIntoRegistry(registry, { name: "fixture", command: "node", args: [fixtureServerPath] }),
+      ).rejects.toThrow(/already registered/);
+
+      expect(closeSpy).toHaveBeenCalledTimes(1);
+    } finally {
+      closeSpy.mockRestore();
+    }
   });
 });
