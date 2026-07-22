@@ -1,0 +1,44 @@
+import { exec } from "node:child_process";
+import { promisify } from "node:util";
+import type { Tool, ToolExecutionContext, ToolExecutionResult } from "../tool/tool.js";
+
+const execAsync = promisify(exec);
+
+const DEFAULT_TIMEOUT_MS = 120_000;
+const MAX_BUFFER_BYTES = 10 * 1024 * 1024;
+
+interface BashInput {
+  command: string;
+}
+
+async function execute(input: unknown, context: ToolExecutionContext): Promise<ToolExecutionResult> {
+  const { command } = input as BashInput;
+
+  try {
+    const { stdout, stderr } = await execAsync(command, {
+      cwd: context.cwd,
+      timeout: DEFAULT_TIMEOUT_MS,
+      maxBuffer: MAX_BUFFER_BYTES,
+    });
+    const output = [stdout, stderr].filter((part) => part.length > 0).join("\n");
+    return { output: output.length > 0 ? output : "(command produced no output)", isError: false };
+  } catch (err) {
+    const execError = err as NodeJS.ErrnoException & { stdout?: string; stderr?: string; killed?: boolean; signal?: string };
+    if (execError.killed && execError.signal === "SIGTERM") {
+      return { output: `Command timed out after ${DEFAULT_TIMEOUT_MS}ms: ${command}`, isError: true };
+    }
+    const combined = [execError.stdout, execError.stderr, execError.message].filter(Boolean).join("\n");
+    return { output: combined, isError: true };
+  }
+}
+
+export const bashTool: Tool = {
+  name: "bash",
+  description: "Runs a shell command in the working directory and returns its combined stdout/stderr.",
+  parameters: {
+    type: "object",
+    properties: { command: { type: "string", description: "The shell command to run." } },
+    required: ["command"],
+  },
+  execute,
+};
