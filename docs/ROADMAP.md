@@ -69,3 +69,5 @@ Each sprint produces working, independently testable software. Only the current/
 **Depends on**: Sprint 3 (real tools), Sprint 2 (loop), Sprint 1 (sessions/provider)
 
 **Definition of done**: all Definition of Done items in [PRD.md](PRD.md) §7 pass, including the self-hosting one-line-change test.
+
+**Carried-over decision from Sprint 3**: this is where a `ToolRegistry` first gets populated with both built-in tools and a real MCP server's tools together — decide tool-name collision handling deliberately here (e.g. namespace MCP tools as `server__tool`, or skip-with-warning) rather than defaulting to `ToolRegistry`'s current throw-on-duplicate-name behavior. The official filesystem reference MCP server exposes `read_file`/`write_file`, which collide with Forge's own built-ins by name, so this will surface immediately once both are wired into one registry.
