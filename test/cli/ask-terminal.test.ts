@@ -82,4 +82,16 @@ describe("askTerminal", () => {
 
     expect(createInterface).not.toHaveBeenCalled();
   });
+
+  it("creates its own readline interface when none is provided (preserves the original single-argument contract)", async () => {
+    const question = vi.fn().mockResolvedValue("y");
+    const close = vi.fn();
+    vi.mocked(createInterface).mockReturnValue({ question, close } as unknown as Interface);
+
+    const approved = await askTerminal({ id: "1", name: "bash", input: {} });
+
+    expect(createInterface).toHaveBeenCalled();
+    expect(approved).toBe(true);
+    expect(close).toHaveBeenCalled();
+  });
 });
