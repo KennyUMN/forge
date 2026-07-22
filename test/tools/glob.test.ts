@@ -40,4 +40,16 @@ describe("globTool", () => {
     expect(result.isError).toBe(false);
     expect(result.output).toContain("No files matched");
   });
+
+  it("returns an error result instead of throwing when pattern is missing", async () => {
+    await expect(globTool.execute({}, { cwd: dir })).resolves.toEqual(
+      expect.objectContaining({ isError: true }),
+    );
+  });
+
+  it("returns an error result instead of throwing when pattern is the wrong type", async () => {
+    await expect(globTool.execute({ pattern: 123 }, { cwd: dir })).resolves.toEqual(
+      expect.objectContaining({ isError: true }),
+    );
+  });
 });

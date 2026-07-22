@@ -1,9 +1,9 @@
 import { glob } from "glob";
 import { readFile } from "node:fs/promises";
-import { isAbsolute, join, relative } from "node:path";
+import { join, relative } from "node:path";
 import type { Tool, ToolExecutionContext, ToolExecutionResult } from "../tool/tool.js";
+import { DEFAULT_IGNORE, resolveSearchRoot } from "./shared.js";
 
-const DEFAULT_IGNORE = ["**/node_modules/**", "**/.git/**", "**/dist/**"];
 const DEFAULT_FILE_PATTERN = "**/*";
 const MAX_MATCHES = 200;
 
@@ -17,11 +17,6 @@ interface Match {
   file: string;
   line: number;
   content: string;
-}
-
-function resolveSearchRoot(inputPath: string | undefined, cwd: string): string {
-  if (!inputPath) return cwd;
-  return isAbsolute(inputPath) ? inputPath : join(cwd, inputPath);
 }
 
 async function searchFile(absolutePath: string, relativePath: string, regex: RegExp): Promise<Match[]> {
@@ -53,19 +48,28 @@ async function execute(input: unknown, context: ToolExecutionContext): Promise<T
     return { output: `Invalid pattern: ${message}`, isError: true };
   }
 
-  const files = await glob(filePattern ?? DEFAULT_FILE_PATTERN, {
-    cwd: root,
-    ignore: DEFAULT_IGNORE,
-    nodir: true,
-    dot: false,
-  });
+  let files: string[];
+  try {
+    files = await glob(filePattern ?? DEFAULT_FILE_PATTERN, {
+      cwd: root,
+      ignore: DEFAULT_IGNORE,
+      nodir: true,
+      dot: false,
+    });
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    return { output: `Invalid file pattern: ${message}`, isError: true };
+  }
 
   const allMatches: Match[] = [];
   for (const file of files) {
     const absolutePath = join(root, file);
     const relativePath = relative(context.cwd, absolutePath);
     allMatches.push(...(await searchFile(absolutePath, relativePath, regex)));
-    if (allMatches.length >= MAX_MATCHES) break;
+    // Only stop once strictly over the cap, so a file landing exactly on
+    // MAX_MATCHES doesn't cause later matches to be dropped without notice
+    // (see truncated check below, which depends on this invariant).
+    if (allMatches.length > MAX_MATCHES) break;
   }
 
   if (allMatches.length === 0) {

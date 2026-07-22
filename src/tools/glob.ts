@@ -1,8 +1,8 @@
 import { glob } from "glob";
-import { isAbsolute, join, relative } from "node:path";
+import { join, relative } from "node:path";
 import type { Tool, ToolExecutionContext, ToolExecutionResult } from "../tool/tool.js";
+import { DEFAULT_IGNORE, resolveSearchRoot } from "./shared.js";
 
-const DEFAULT_IGNORE = ["**/node_modules/**", "**/.git/**", "**/dist/**"];
 const MAX_RESULTS = 200;
 
 interface GlobInput {
@@ -10,16 +10,17 @@ interface GlobInput {
   path?: string;
 }
 
-function resolveSearchRoot(inputPath: string | undefined, cwd: string): string {
-  if (!inputPath) return cwd;
-  return isAbsolute(inputPath) ? inputPath : join(cwd, inputPath);
-}
-
 async function execute(input: unknown, context: ToolExecutionContext): Promise<ToolExecutionResult> {
   const { pattern, path } = input as GlobInput;
   const root = resolveSearchRoot(path, context.cwd);
 
-  const matches = await glob(pattern, { cwd: root, ignore: DEFAULT_IGNORE, nodir: true, dot: false });
+  let matches: string[];
+  try {
+    matches = await glob(pattern, { cwd: root, ignore: DEFAULT_IGNORE, nodir: true, dot: false });
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    return { output: `Invalid pattern: ${message}`, isError: true };
+  }
   matches.sort();
 
   if (matches.length === 0) {
