@@ -71,3 +71,7 @@ Each sprint produces working, independently testable software. Only the current/
 **Definition of done**: all Definition of Done items in [PRD.md](PRD.md) §7 pass, including the self-hosting one-line-change test.
 
 **Carried-over decision from Sprint 3**: this is where a `ToolRegistry` first gets populated with both built-in tools and a real MCP server's tools together — decide tool-name collision handling deliberately here (e.g. namespace MCP tools as `server__tool`, or skip-with-warning) rather than defaulting to `ToolRegistry`'s current throw-on-duplicate-name behavior. The official filesystem reference MCP server exposes `read_file`/`write_file`, which collide with Forge's own built-ins by name, so this will surface immediately once both are wired into one registry.
+
+**Resolved**: namespacing (`<serverName>__<toolName>`), applied only when loading MCP tools into a shared registry (`loadMcpServerIntoRegistry`), not to `connectMcpServer`'s raw tool list. See [2026-07-22-sprint-4-cli-wiring.md](superpowers/plans/2026-07-22-sprint-4-cli-wiring.md) Task 2.
+
+**Plan**: [2026-07-22-sprint-4-cli-wiring.md](superpowers/plans/2026-07-22-sprint-4-cli-wiring.md)
