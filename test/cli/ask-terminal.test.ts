@@ -1,12 +1,11 @@
 import { describe, it, expect, vi } from "vitest";
 import { createInterface } from "node:readline/promises";
-import { parseYesNo, formatAskPrompt, askTerminal } from "../../src/cli/ask-terminal.js";
+import { parseYesNo, formatAskPrompt, askTerminal, createSharedAskFn } from "../../src/cli/ask-terminal.js";
 import type { Interface } from "node:readline/promises";
 
-// Mocked so the "does not create its own readline interface" test below can
-// assert createInterface is never called by askTerminal -- native ESM
-// built-ins can't be vi.spyOn'd in place (their exports aren't configurable),
-// so the module itself must be mocked instead.
+// Mocked so askTerminal's own createInterface call can be controlled --
+// native ESM built-ins can't be vi.spyOn'd in place (their exports aren't
+// configurable), so the module itself must be mocked instead.
 vi.mock("node:readline/promises", () => ({
   createInterface: vi.fn(),
 }));
@@ -47,51 +46,53 @@ describe("formatAskPrompt", () => {
 });
 
 describe("askTerminal", () => {
-  // Regression tests for a defect where askTerminal created its own
-  // readline Interface on process.stdin even though the CLI's main loop
-  // already keeps one alive for the whole session. Two Interfaces sharing
-  // one input stream corrupts real TTY input (duplicate-echoed keystrokes)
-  // and closing either one disables raw mode for the other. askTerminal
-  // must reuse the caller's Interface instead of creating its own.
-
-  it("asks the question through the provided readline interface and returns the parsed answer", async () => {
+  it("opens its own readline interface, asks the question, and closes it afterward", async () => {
     const question = vi.fn().mockResolvedValue("y");
-    const fakeRl = { question } as unknown as Interface;
+    const close = vi.fn();
+    vi.mocked(createInterface).mockReturnValue({ question, close } as unknown as Interface);
+
     const call = { id: "1", name: "bash", input: { command: "ls" } };
+    const approved = await askTerminal(call);
 
-    const approved = await askTerminal(call, fakeRl);
-
-    expect(approved).toBe(true);
+    expect(createInterface).toHaveBeenCalled();
     expect(question).toHaveBeenCalledWith(formatAskPrompt(call));
+    expect(approved).toBe(true);
+    expect(close).toHaveBeenCalled();
   });
 
-  it("parses a 'n' answer from the provided interface as denied", async () => {
+  it("parses a 'n' answer as denied", async () => {
     const question = vi.fn().mockResolvedValue("n");
-    const fakeRl = { question } as unknown as Interface;
-
-    const approved = await askTerminal({ id: "1", name: "bash", input: {} }, fakeRl);
-
-    expect(approved).toBe(false);
-  });
-
-  it("does not create its own readline interface (must reuse the caller's, to avoid a second Interface on process.stdin)", async () => {
-    const question = vi.fn().mockResolvedValue("y");
-    const fakeRl = { question } as unknown as Interface;
-
-    await askTerminal({ id: "1", name: "bash", input: {} }, fakeRl);
-
-    expect(createInterface).not.toHaveBeenCalled();
-  });
-
-  it("creates its own readline interface when none is provided (preserves the original single-argument contract)", async () => {
-    const question = vi.fn().mockResolvedValue("y");
     const close = vi.fn();
     vi.mocked(createInterface).mockReturnValue({ question, close } as unknown as Interface);
 
     const approved = await askTerminal({ id: "1", name: "bash", input: {} });
 
-    expect(createInterface).toHaveBeenCalled();
+    expect(approved).toBe(false);
+  });
+});
+
+describe("createSharedAskFn", () => {
+  it("asks through the given interface and returns the parsed answer when it resolves before closed", async () => {
+    const question = vi.fn().mockResolvedValue("y");
+    const fakeRl = { question } as unknown as Interface;
+    const neverCloses = new Promise<null>(() => {});
+
+    const call = { id: "1", name: "bash", input: {} };
+    const ask = createSharedAskFn(fakeRl, neverCloses);
+    const approved = await ask(call);
+
     expect(approved).toBe(true);
-    expect(close).toHaveBeenCalled();
+    expect(question).toHaveBeenCalledWith(formatAskPrompt(call));
+  });
+
+  it("resolves to false (denied) instead of hanging when stdin closes before the question resolves", async () => {
+    const question = vi.fn().mockReturnValue(new Promise<string>(() => {}));
+    const fakeRl = { question } as unknown as Interface;
+    const closed: Promise<null> = Promise.resolve(null);
+
+    const ask = createSharedAskFn(fakeRl, closed);
+    const approved = await ask({ id: "1", name: "bash", input: {} });
+
+    expect(approved).toBe(false);
   });
 });

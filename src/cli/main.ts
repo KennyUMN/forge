@@ -7,7 +7,7 @@ import { DEFAULT_PERMISSION_POLICIES } from "../permission/permission-policies.j
 import { runTurn } from "../agent/turn-orchestrator.js";
 import { buildToolRegistry } from "./build-registry.js";
 import { loadConfig, requireApiKey } from "./config.js";
-import { askTerminal } from "./ask-terminal.js";
+import { createSharedAskFn } from "./ask-terminal.js";
 import { parseArgs, resolveSession } from "./resolve-session.js";
 
 const DEFAULT_MODEL = "claude-sonnet-4-5";
@@ -26,11 +26,6 @@ export async function main(argv: string[]): Promise<void> {
   const provider = new AnthropicProvider({ apiKey, model: DEFAULT_MODEL });
 
   const rl = createInterface({ input: process.stdin, output: process.stdout });
-  // Share this single Interface with askTerminal instead of letting it open
-  // a second one on process.stdin -- two independent readline Interfaces on
-  // the same input stream corrupts real TTY input (duplicate-echoed
-  // keystrokes) and closing either one disables raw mode for the other.
-  const gate = new PermissionGate(DEFAULT_PERMISSION_POLICIES, (call) => askTerminal(call, rl));
 
   // rl.question() never settles if the underlying stdin stream ends while
   // it's pending (Ctrl-D / piped EOF) -- readline's "close" event fires
@@ -44,6 +39,15 @@ export async function main(argv: string[]): Promise<void> {
   // block (closing rl and the tool registry) instead of hanging forever --
   // and, whenever an MCP server is configured, orphaning its subprocess.
   const closed = once(rl, "close").then(() => null);
+
+  // Share this single Interface (and its "close" signal) with the permission
+  // gate instead of letting it open a second Interface on process.stdin --
+  // two independent readline Interfaces on the same input stream corrupts
+  // real TTY input (duplicate-echoed keystrokes) and closing either one
+  // disables raw mode for the other. Racing against `closed` here too means
+  // a permission prompt pending at stdin EOF resolves to "denied" instead of
+  // hanging forever the same way the loop's own rl.question() call would.
+  const gate = new PermissionGate(DEFAULT_PERMISSION_POLICIES, createSharedAskFn(rl, closed));
 
   try {
     while (true) {
