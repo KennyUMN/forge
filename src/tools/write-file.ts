@@ -1,18 +1,21 @@
 import { mkdir, writeFile } from "node:fs/promises";
-import { dirname, isAbsolute, join } from "node:path";
+import { dirname } from "node:path";
 import type { Tool, ToolExecutionContext, ToolExecutionResult } from "../tool/tool.js";
+import { resolvePath } from "./path-utils.js";
 
 interface WriteFileInput {
   path: string;
   content: string;
 }
 
-function resolvePath(inputPath: string, cwd: string): string {
-  return isAbsolute(inputPath) ? inputPath : join(cwd, inputPath);
-}
-
 async function execute(input: unknown, context: ToolExecutionContext): Promise<ToolExecutionResult> {
-  const { path, content } = input as WriteFileInput;
+  const { path, content } = (input ?? {}) as Partial<WriteFileInput>;
+  if (typeof path !== "string") {
+    return { output: `Invalid input: "path" must be a string.`, isError: true };
+  }
+  if (typeof content !== "string") {
+    return { output: `Invalid input: "content" must be a string.`, isError: true };
+  }
   const resolved = resolvePath(path, context.cwd);
   try {
     await mkdir(dirname(resolved), { recursive: true });

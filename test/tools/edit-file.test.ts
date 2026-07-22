@@ -53,4 +53,39 @@ describe("editFileTool", () => {
 
     expect(result.isError).toBe(true);
   });
+
+  it("does not interpret $-patterns in newText as special replacement sequences", async () => {
+    await writeFile(join(dir, "a.ts"), "before X after", "utf8");
+
+    const result = await editFileTool.execute(
+      { path: "a.ts", oldText: "X", newText: "value $& end" },
+      { cwd: dir },
+    );
+
+    expect(result.isError).toBe(false);
+    expect(await readFile(join(dir, "a.ts"), "utf8")).toBe("before value $& end after");
+  });
+
+  it("returns an error instead of throwing when path is missing or not a string", async () => {
+    const result = await editFileTool.execute({ oldText: "a", newText: "b" }, { cwd: dir });
+
+    expect(result.isError).toBe(true);
+  });
+
+  it("returns an error instead of throwing when oldText is missing or not a string", async () => {
+    await writeFile(join(dir, "a.ts"), "content", "utf8");
+
+    const result = await editFileTool.execute({ path: "a.ts", newText: "b" }, { cwd: dir });
+
+    expect(result.isError).toBe(true);
+  });
+
+  it("returns an error instead of silently inserting the literal text 'undefined' when newText is missing", async () => {
+    await writeFile(join(dir, "a.ts"), "content", "utf8");
+
+    const result = await editFileTool.execute({ path: "a.ts", oldText: "content" }, { cwd: dir });
+
+    expect(result.isError).toBe(true);
+    expect(await readFile(join(dir, "a.ts"), "utf8")).toBe("content");
+  });
 });

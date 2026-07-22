@@ -38,4 +38,10 @@ describe("readFileTool", () => {
     expect(result.isError).toBe(true);
     expect(result.output).toContain("does-not-exist.txt");
   });
+
+  it("returns an error instead of throwing when path is missing or not a string", async () => {
+    const result = await readFileTool.execute({}, { cwd: dir });
+
+    expect(result.isError).toBe(true);
+  });
 });

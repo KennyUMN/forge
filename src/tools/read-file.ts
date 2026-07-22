@@ -1,17 +1,16 @@
 import { readFile } from "node:fs/promises";
-import { isAbsolute, join } from "node:path";
 import type { Tool, ToolExecutionContext, ToolExecutionResult } from "../tool/tool.js";
+import { resolvePath } from "./path-utils.js";
 
 interface ReadFileInput {
   path: string;
 }
 
-function resolvePath(inputPath: string, cwd: string): string {
-  return isAbsolute(inputPath) ? inputPath : join(cwd, inputPath);
-}
-
 async function execute(input: unknown, context: ToolExecutionContext): Promise<ToolExecutionResult> {
-  const { path } = input as ReadFileInput;
+  const { path } = (input ?? {}) as Partial<ReadFileInput>;
+  if (typeof path !== "string") {
+    return { output: `Invalid input: "path" must be a string.`, isError: true };
+  }
   const resolved = resolvePath(path, context.cwd);
   try {
     const content = await readFile(resolved, "utf8");

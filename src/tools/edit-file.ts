@@ -1,15 +1,11 @@
 import { readFile, writeFile } from "node:fs/promises";
-import { isAbsolute, join } from "node:path";
 import type { Tool, ToolExecutionContext, ToolExecutionResult } from "../tool/tool.js";
+import { resolvePath } from "./path-utils.js";
 
 interface EditFileInput {
   path: string;
   oldText: string;
   newText: string;
-}
-
-function resolvePath(inputPath: string, cwd: string): string {
-  return isAbsolute(inputPath) ? inputPath : join(cwd, inputPath);
 }
 
 function countOccurrences(haystack: string, needle: string): number {
@@ -24,7 +20,16 @@ function countOccurrences(haystack: string, needle: string): number {
 }
 
 async function execute(input: unknown, context: ToolExecutionContext): Promise<ToolExecutionResult> {
-  const { path, oldText, newText } = input as EditFileInput;
+  const { path, oldText, newText } = (input ?? {}) as Partial<EditFileInput>;
+  if (typeof path !== "string") {
+    return { output: `Invalid input: "path" must be a string.`, isError: true };
+  }
+  if (typeof oldText !== "string") {
+    return { output: `Invalid input: "oldText" must be a string.`, isError: true };
+  }
+  if (typeof newText !== "string") {
+    return { output: `Invalid input: "newText" must be a string.`, isError: true };
+  }
   const resolved = resolvePath(path, context.cwd);
 
   let content: string;
@@ -46,7 +51,11 @@ async function execute(input: unknown, context: ToolExecutionContext): Promise<T
     };
   }
 
-  const updated = content.replace(oldText, newText);
+  // Use a replacer function, not the newText string directly: String.prototype.replace
+  // interprets "$&", "$$", etc. in a string replacement as special patterns even when
+  // the search value is a plain string, which would silently corrupt newText containing
+  // any of those sequences (e.g. regex literals, Makefiles, shell scripts).
+  const updated = content.replace(oldText, () => newText);
   try {
     await writeFile(resolved, updated, "utf8");
     return { output: `Edited "${path}".`, isError: false };

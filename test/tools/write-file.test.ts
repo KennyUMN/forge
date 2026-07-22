@@ -35,4 +35,16 @@ describe("writeFileTool", () => {
     expect(result.isError).toBe(false);
     expect(await readFile(join(dir, "nested/deep/file.txt"), "utf8")).toBe("x");
   });
+
+  it("returns an error instead of throwing when path is missing or not a string", async () => {
+    const result = await writeFileTool.execute({ content: "x" }, { cwd: dir });
+
+    expect(result.isError).toBe(true);
+  });
+
+  it("returns an error instead of throwing when content is missing or not a string", async () => {
+    const result = await writeFileTool.execute({ path: "new.txt" }, { cwd: dir });
+
+    expect(result.isError).toBe(true);
+  });
 });
