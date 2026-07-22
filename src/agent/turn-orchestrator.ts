@@ -18,6 +18,7 @@ export interface TurnOrchestratorOptions {
   systemPrompt: string;
   toolContext: ToolExecutionContext;
   maxSteps?: number;
+  onTextDelta?: (text: string) => void;
 }
 
 export type TurnStoppedReason = "completed" | "max_steps_reached";
@@ -53,7 +54,7 @@ function failTruncatedToolCalls(calls: readonly ToolCallRequest[]): ToolResult[]
 // with no further tool calls, or when maxSteps is exhausted as a safety bound
 // against a runaway tool-calling loop.
 export async function runTurn(userText: string, options: TurnOrchestratorOptions): Promise<TurnResult> {
-  const { provider, session, tools, gate, systemPrompt, toolContext } = options;
+  const { provider, session, tools, gate, systemPrompt, toolContext, onTextDelta } = options;
   const maxSteps = options.maxSteps ?? DEFAULT_MAX_STEPS;
   const toolSchemas = toolsToSchemas(tools);
 
@@ -63,7 +64,7 @@ export async function runTurn(userText: string, options: TurnOrchestratorOptions
 
   for (let step = 1; step <= maxSteps; step++) {
     const messages = sessionEntriesToMessages(session.getEntries());
-    const stepResult = await executeStep(provider, { systemPrompt, messages, tools: toolSchemas });
+    const stepResult = await executeStep(provider, { systemPrompt, messages, tools: toolSchemas }, { onTextDelta });
 
     if (stepResult.text) {
       await session.append("assistant_message", { text: stepResult.text });

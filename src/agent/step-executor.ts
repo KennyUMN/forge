@@ -8,11 +8,21 @@ export interface StepResult {
   finishReason: FinishReason;
 }
 
+export interface StepCallbacks {
+  onTextDelta?: (text: string) => void;
+}
+
 // Runs exactly one model round-trip: streams the provider's response and
 // accumulates it into a single result. Does not dispatch tool calls or touch
 // the session log -- that's the Tool Dispatcher's and Turn Orchestrator's
-// job, kept separate so each unit is independently testable.
-export async function executeStep(provider: ModelProvider, context: StreamContext): Promise<StepResult> {
+// job, kept separate so each unit is independently testable. The optional
+// onTextDelta callback lets a caller (e.g. the CLI) render text as it
+// streams in, without changing what this function returns.
+export async function executeStep(
+  provider: ModelProvider,
+  context: StreamContext,
+  callbacks: StepCallbacks = {},
+): Promise<StepResult> {
   let text = "";
   const toolCalls: ToolCallRequest[] = [];
   let finishReason: FinishReason = "other";
@@ -20,6 +30,7 @@ export async function executeStep(provider: ModelProvider, context: StreamContex
   for await (const event of provider.stream(context)) {
     if (event.type === "text_delta") {
       text += event.text;
+      callbacks.onTextDelta?.(event.text);
     } else if (event.type === "tool_call") {
       toolCalls.push({ id: event.id, name: event.name, input: event.input });
     } else if (event.type === "finish") {
