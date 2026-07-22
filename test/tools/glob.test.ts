@@ -67,4 +67,22 @@ describe("globTool", () => {
       globTool.execute({ pattern: "**/*.ts", path: 123 }, { cwd: dir }),
     ).resolves.toEqual(expect.objectContaining({ isError: true }));
   });
+
+  it("caps results at 200 matches and reports how many more were not shown", async () => {
+    const bigDir = await mkdtemp(join(tmpdir(), "forge-glob-cap-"));
+    try {
+      const fileCount = 205;
+      await Promise.all(
+        Array.from({ length: fileCount }, (_, i) => writeFile(join(bigDir, `f${i}.txt`), "", "utf8")),
+      );
+
+      const result = await globTool.execute({ pattern: "*.txt" }, { cwd: bigDir });
+
+      expect(result.isError).toBe(false);
+      expect(result.output.split("\n").filter((line) => line.endsWith(".txt"))).toHaveLength(200);
+      expect(result.output).toContain("5 more match(es) not shown");
+    } finally {
+      await rm(bigDir, { recursive: true, force: true });
+    }
+  });
 });
