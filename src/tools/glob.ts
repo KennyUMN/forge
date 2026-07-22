@@ -1,7 +1,8 @@
 import { glob } from "glob";
 import { join, relative } from "node:path";
 import type { Tool, ToolExecutionContext, ToolExecutionResult } from "../tool/tool.js";
-import { DEFAULT_IGNORE, resolveSearchRoot } from "./shared.js";
+import { resolvePath } from "./path-utils.js";
+import { DEFAULT_IGNORE } from "./shared.js";
 
 const MAX_RESULTS = 200;
 
@@ -18,7 +19,7 @@ async function execute(input: unknown, context: ToolExecutionContext): Promise<T
   if (path !== undefined && typeof path !== "string") {
     return { output: `Invalid input: "path" must be a string.`, isError: true };
   }
-  const root = resolveSearchRoot(path, context.cwd);
+  const root = resolvePath(path, context.cwd);
 
   let matches: string[];
   try {

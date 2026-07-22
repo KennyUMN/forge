@@ -2,7 +2,8 @@ import { glob } from "glob";
 import { readFile } from "node:fs/promises";
 import { join, relative } from "node:path";
 import type { Tool, ToolExecutionContext, ToolExecutionResult } from "../tool/tool.js";
-import { DEFAULT_IGNORE, resolveSearchRoot } from "./shared.js";
+import { resolvePath } from "./path-utils.js";
+import { DEFAULT_IGNORE } from "./shared.js";
 
 const DEFAULT_FILE_PATTERN = "**/*";
 const MAX_MATCHES = 200;
@@ -44,7 +45,7 @@ async function execute(input: unknown, context: ToolExecutionContext): Promise<T
   if (path !== undefined && typeof path !== "string") {
     return { output: `Invalid input: "path" must be a string.`, isError: true };
   }
-  const root = resolveSearchRoot(path, context.cwd);
+  const root = resolvePath(path, context.cwd);
 
   let regex: RegExp;
   try {
@@ -85,6 +86,10 @@ async function execute(input: unknown, context: ToolExecutionContext): Promise<T
   const truncated = allMatches.length > MAX_MATCHES;
   const shown = truncated ? allMatches.slice(0, MAX_MATCHES) : allMatches;
   const lines = shown.map((m) => `${m.file}:${m.line}:${m.content}`);
+  // Unlike glob's suffix, this can't report an exact hidden count: the loop above
+  // breaks out of the file-by-file scan as soon as it goes over the cap, so any
+  // matches in files after that point are never counted. Don't "fix" this into
+  // reporting a number -- it would have to be an undercount of the true total.
   const suffix = truncated ? `\n... more matches not shown; narrow the pattern or path.` : "";
 
   return { output: lines.join("\n") + suffix, isError: false };
