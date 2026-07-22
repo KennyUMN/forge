@@ -32,6 +32,19 @@ describe("connectMcpServer", () => {
 
     expect(result).toEqual({ output: "echo: hello", isError: false });
   });
+
+  it("returns an error result instead of throwing when the underlying MCP call rejects", async () => {
+    const connection = await connectMcpServer({ name: "fixture", command: "node", args: [fixtureServerPath] });
+    const tool = connection.tools[0];
+
+    await connection.close();
+    cleanup = undefined;
+
+    const result = await tool.execute({ text: "hello" }, { cwd: "/tmp" });
+
+    expect(result.isError).toBe(true);
+    expect(result.output).toContain("fixture_echo");
+  });
 });
 
 describe("loadMcpServerIntoRegistry", () => {

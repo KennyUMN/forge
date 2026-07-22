@@ -37,10 +37,16 @@ function toForgeTool(
     description: mcpTool.description ?? "",
     parameters: mcpTool.inputSchema,
     async execute(input): Promise<ToolExecutionResult> {
-      const result = await client.callTool({
-        name: mcpTool.name,
-        arguments: input as Record<string, unknown> | undefined,
-      });
+      let result: Awaited<ReturnType<Client["callTool"]>>;
+      try {
+        result = await client.callTool({
+          name: mcpTool.name,
+          arguments: input as Record<string, unknown> | undefined,
+        });
+      } catch (err) {
+        const message = err instanceof Error ? err.message : String(err);
+        return { output: `MCP tool "${mcpTool.name}" call failed: ${message}`, isError: true };
+      }
       const isError = "isError" in result && Boolean(result.isError);
       return { output: extractOutput(result), isError };
     },
