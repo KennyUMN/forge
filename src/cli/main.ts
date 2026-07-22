@@ -24,9 +24,13 @@ export async function main(argv: string[]): Promise<void> {
 
   const registryHandle = await buildToolRegistry(config.mcpServers);
   const provider = new AnthropicProvider({ apiKey, model: DEFAULT_MODEL });
-  const gate = new PermissionGate(DEFAULT_PERMISSION_POLICIES, askTerminal);
 
   const rl = createInterface({ input: process.stdin, output: process.stdout });
+  // Share this single Interface with askTerminal instead of letting it open
+  // a second one on process.stdin -- two independent readline Interfaces on
+  // the same input stream corrupts real TTY input (duplicate-echoed
+  // keystrokes) and closing either one disables raw mode for the other.
+  const gate = new PermissionGate(DEFAULT_PERMISSION_POLICIES, (call) => askTerminal(call, rl));
 
   // rl.question() never settles if the underlying stdin stream ends while
   // it's pending (Ctrl-D / piped EOF) -- readline's "close" event fires
