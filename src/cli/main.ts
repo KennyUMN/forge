@@ -1,4 +1,5 @@
 import { createInterface } from "node:readline/promises";
+import { once } from "node:events";
 import { join } from "node:path";
 import { AnthropicProvider } from "../provider/anthropic-provider.js";
 import { PermissionGate } from "../permission/permission-gate.js";
@@ -29,7 +30,15 @@ export async function main(argv: string[]): Promise<void> {
 
   try {
     while (true) {
-      const userText = await rl.question("> ");
+      // rl.question() never settles if the underlying stdin stream ends
+      // while it's pending (Ctrl-D / piped EOF) -- readline's "close" event
+      // fires instead, with no way to plumb it through question()'s own
+      // promise. Race against "close" so EOF breaks the loop and reaches the
+      // finally block (closing rl and the tool registry) instead of hanging
+      // forever -- and, whenever an MCP server is configured, orphaning its
+      // subprocess.
+      const userText = await Promise.race([rl.question("> "), once(rl, "close").then(() => null)]);
+      if (userText === null) break;
       const trimmed = userText.trim();
       if (trimmed.length === 0) continue;
       if (trimmed === "/exit") break;
