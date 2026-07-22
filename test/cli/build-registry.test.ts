@@ -1,5 +1,6 @@
-import { describe, it, expect, afterEach } from "vitest";
+import { describe, it, expect, afterEach, vi } from "vitest";
 import { fileURLToPath } from "node:url";
+import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
 import { buildToolRegistry } from "../../src/cli/build-registry.js";
 
 const fixtureServerPath = fileURLToPath(new URL("../fixtures/mcp-fixture-server.js", import.meta.url));
@@ -35,5 +36,25 @@ describe("buildToolRegistry", () => {
 
     await expect(handle.close()).resolves.not.toThrow();
     cleanup = undefined;
+  });
+
+  it("closes previously-opened MCP connections before propagating a later server's failure", async () => {
+    const closeSpy = vi.spyOn(StdioClientTransport.prototype, "close");
+
+    try {
+      await expect(
+        buildToolRegistry([
+          { name: "fixture", command: "node", args: [fixtureServerPath] },
+          { name: "fixture", command: "node", args: [fixtureServerPath] },
+        ]),
+      ).rejects.toThrow(/already registered/);
+
+      // One close() from loadMcpServerIntoRegistry's own cleanup of the
+      // second (failed) connection, plus one from buildToolRegistry closing
+      // the first (already-successful) connection instead of leaking it.
+      expect(closeSpy).toHaveBeenCalledTimes(2);
+    } finally {
+      closeSpy.mockRestore();
+    }
   });
 });

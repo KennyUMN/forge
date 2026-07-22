@@ -26,9 +26,21 @@ export async function buildToolRegistry(mcpServers: McpServerConfig[]): Promise<
   }
 
   const closers: Array<() => Promise<void>> = [];
-  for (const config of mcpServers) {
-    const connection = await loadMcpServerIntoRegistry(registry, config);
-    closers.push(connection.close);
+  try {
+    for (const config of mcpServers) {
+      const connection = await loadMcpServerIntoRegistry(registry, config);
+      closers.push(connection.close);
+    }
+  } catch (err) {
+    // A later server's connection can still throw (e.g. a tool-name collision
+    // with an earlier server's already-registered tools, or the server
+    // process itself failing to start). Every earlier connection in
+    // `closers` was already opened successfully, but this function never
+    // returns on this path, so the caller has no handle to close them. Close
+    // them all here (best-effort, so one close() failing doesn't stop the
+    // rest from being attempted) before propagating the original error.
+    await Promise.allSettled(closers.map((close) => close()));
+    throw err;
   }
 
   return {
