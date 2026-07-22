@@ -77,6 +77,17 @@ export async function connectMcpServer(config: McpServerConfig): Promise<McpConn
   };
 }
 
+// Prefixes a tool's name with its server name (e.g. "fs__read_file") so
+// tools loaded from different MCP servers -- or from an MCP server whose
+// tool happens to share a name with one of Forge's own built-ins, like the
+// official filesystem server's read_file/write_file -- can never collide in
+// a shared ToolRegistry. The tool's own execute() still calls the MCP server
+// using its original, non-namespaced name (that name is closed over inside
+// toForgeTool), so behavior is unaffected -- only the registry key changes.
+function namespaceTool(tool: Tool, serverName: string): Tool {
+  return { ...tool, name: `${serverName}__${tool.name}` };
+}
+
 export async function loadMcpServerIntoRegistry(
   registry: ToolRegistry,
   config: McpServerConfig,
@@ -84,7 +95,7 @@ export async function loadMcpServerIntoRegistry(
   const connection = await connectMcpServer(config);
   try {
     for (const tool of connection.tools) {
-      registry.registerTool(tool);
+      registry.registerTool(namespaceTool(tool, config.name));
     }
   } catch (err) {
     // registerTool() throws on the first name collision, leaving the tools

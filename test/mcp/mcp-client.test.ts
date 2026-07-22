@@ -68,7 +68,7 @@ describe("connectMcpServer", () => {
 });
 
 describe("loadMcpServerIntoRegistry", () => {
-  it("registers every tool from a connected MCP server into the given registry", async () => {
+  it("registers every tool from a connected MCP server into the given registry, namespaced by server name", async () => {
     const registry = new ToolRegistry();
 
     const connection = await loadMcpServerIntoRegistry(registry, {
@@ -78,7 +78,8 @@ describe("loadMcpServerIntoRegistry", () => {
     });
     cleanup = connection.close;
 
-    const tool = registry.getTool("fixture_echo");
+    expect(registry.getTool("fixture_echo")).toBeUndefined();
+    const tool = registry.getTool("fixture__fixture_echo");
     expect(tool).toBeDefined();
     const result = await tool!.execute({ text: "hi" }, { cwd: "/tmp" });
     expect(result).toEqual({ output: "echo: hi", isError: false });
@@ -87,8 +88,8 @@ describe("loadMcpServerIntoRegistry", () => {
   it("closes the connection instead of leaking the subprocess when a tool name collision throws during registration", async () => {
     const registry = new ToolRegistry();
     registry.registerTool({
-      name: "fixture_echo",
-      description: "pre-existing tool with a colliding name",
+      name: "fixture__fixture_echo",
+      description: "pre-existing tool with a colliding namespaced name",
       parameters: {},
       async execute() {
         return { output: "pre-existing", isError: false };
