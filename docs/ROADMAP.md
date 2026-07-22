@@ -36,6 +36,8 @@ Each sprint produces working, independently testable software. Only the current/
 
 **Definition of done**: a scripted conversation against a fake tool and fake provider runs end-to-end through the full loop, including one denied-then-corrected tool call and one doom-loop trigger, all as automated tests.
 
+**Plan**: [2026-07-22-sprint-2-agent-loop-and-permission-gate.md](superpowers/plans/2026-07-22-sprint-2-agent-loop-and-permission-gate.md)
+
 ---
 
 ## Sprint 3 — Plugin/Tool Registry + MCP client + built-in tools
