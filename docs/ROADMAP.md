@@ -53,6 +53,8 @@ Each sprint produces working, independently testable software. Only the current/
 
 **Definition of done**: Forge can read, edit, and write a real file and run a real shell command through the full loop; at least one real third-party MCP server's tools appear in the tool list and are callable.
 
+**Plan**: [2026-07-22-sprint-3-tools-and-mcp.md](superpowers/plans/2026-07-22-sprint-3-tools-and-mcp.md)
+
 ---
 
 ## Sprint 4 — CLI wiring + integration testing
