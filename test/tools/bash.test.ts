@@ -35,4 +35,13 @@ describe("bashTool", () => {
     expect(result.isError).toBe(true);
     expect(result.output).toContain("failure-message");
   });
+
+  it("returns an error result instead of throwing when input is null or undefined", async () => {
+    await expect(bashTool.execute(null, { cwd: process.cwd() })).resolves.toEqual(
+      expect.objectContaining({ isError: true }),
+    );
+    await expect(bashTool.execute(undefined, { cwd: process.cwd() })).resolves.toEqual(
+      expect.objectContaining({ isError: true }),
+    );
+  });
 });

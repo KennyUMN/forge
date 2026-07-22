@@ -52,4 +52,13 @@ describe("globTool", () => {
       expect.objectContaining({ isError: true }),
     );
   });
+
+  it("returns an error result instead of throwing when input is null or undefined", async () => {
+    await expect(globTool.execute(null, { cwd: dir })).resolves.toEqual(
+      expect.objectContaining({ isError: true }),
+    );
+    await expect(globTool.execute(undefined, { cwd: dir })).resolves.toEqual(
+      expect.objectContaining({ isError: true }),
+    );
+  });
 });

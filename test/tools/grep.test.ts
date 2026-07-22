@@ -60,6 +60,15 @@ describe("grepTool", () => {
     ).resolves.toEqual(expect.objectContaining({ isError: true }));
   });
 
+  it("returns an error result instead of throwing when input is null or undefined", async () => {
+    await expect(grepTool.execute(null, { cwd: dir })).resolves.toEqual(
+      expect.objectContaining({ isError: true }),
+    );
+    await expect(grepTool.execute(undefined, { cwd: dir })).resolves.toEqual(
+      expect.objectContaining({ isError: true }),
+    );
+  });
+
   it("reports truncation even when the running match count lands exactly on the cap partway through the file list", async () => {
     const bigDir = await mkdtemp(join(tmpdir(), "forge-grep-cap-"));
     try {

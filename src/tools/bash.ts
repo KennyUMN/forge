@@ -12,7 +12,10 @@ interface BashInput {
 }
 
 async function execute(input: unknown, context: ToolExecutionContext): Promise<ToolExecutionResult> {
-  const { command } = input as BashInput;
+  const { command } = (input ?? {}) as Partial<BashInput>;
+  if (typeof command !== "string") {
+    return { output: `Invalid input: "command" must be a string.`, isError: true };
+  }
 
   try {
     const { stdout, stderr } = await execAsync(command, {

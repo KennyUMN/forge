@@ -11,7 +11,10 @@ interface GlobInput {
 }
 
 async function execute(input: unknown, context: ToolExecutionContext): Promise<ToolExecutionResult> {
-  const { pattern, path } = input as GlobInput;
+  const { pattern, path } = (input ?? {}) as Partial<GlobInput>;
+  if (typeof pattern !== "string") {
+    return { output: `Invalid input: "pattern" must be a string.`, isError: true };
+  }
   const root = resolveSearchRoot(path, context.cwd);
 
   let matches: string[];

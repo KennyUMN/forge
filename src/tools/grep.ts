@@ -37,7 +37,10 @@ async function searchFile(absolutePath: string, relativePath: string, regex: Reg
 }
 
 async function execute(input: unknown, context: ToolExecutionContext): Promise<ToolExecutionResult> {
-  const { pattern, path, filePattern } = input as GrepInput;
+  const { pattern, path, filePattern } = (input ?? {}) as Partial<GrepInput>;
+  if (typeof pattern !== "string") {
+    return { output: `Invalid input: "pattern" must be a string.`, isError: true };
+  }
   const root = resolveSearchRoot(path, context.cwd);
 
   let regex: RegExp;
