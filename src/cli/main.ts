@@ -28,16 +28,22 @@ export async function main(argv: string[]): Promise<void> {
 
   const rl = createInterface({ input: process.stdin, output: process.stdout });
 
+  // rl.question() never settles if the underlying stdin stream ends while
+  // it's pending (Ctrl-D / piped EOF) -- readline's "close" event fires
+  // instead, with no way to plumb it through question()'s own promise. Race
+  // each question() against this single "close" listener, registered once
+  // outside the loop -- re-registering a new once(rl, "close") on every
+  // iteration (as an earlier version of this fix did) leaks a "close" and
+  // "error" listener pair per turn, which trips Node's
+  // MaxListenersExceededWarning in any session with more than ~10 turns.
+  // EOF resolves this to null, breaking the loop and reaching the finally
+  // block (closing rl and the tool registry) instead of hanging forever --
+  // and, whenever an MCP server is configured, orphaning its subprocess.
+  const closed = once(rl, "close").then(() => null);
+
   try {
     while (true) {
-      // rl.question() never settles if the underlying stdin stream ends
-      // while it's pending (Ctrl-D / piped EOF) -- readline's "close" event
-      // fires instead, with no way to plumb it through question()'s own
-      // promise. Race against "close" so EOF breaks the loop and reaches the
-      // finally block (closing rl and the tool registry) instead of hanging
-      // forever -- and, whenever an MCP server is configured, orphaning its
-      // subprocess.
-      const userText = await Promise.race([rl.question("> "), once(rl, "close").then(() => null)]);
+      const userText = await Promise.race([rl.question("> "), closed]);
       if (userText === null) break;
       const trimmed = userText.trim();
       if (trimmed.length === 0) continue;

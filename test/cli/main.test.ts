@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
-import { Readable } from "node:stream";
+import { Readable, PassThrough } from "node:stream";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -43,5 +43,58 @@ describe("main", () => {
       await expect(main([])).resolves.toBeUndefined();
     },
     3000,
+  );
+
+  it(
+    "does not leak a close/error listener pair on rl across multiple prompt iterations",
+    async () => {
+      // Regression test for a leak where racing rl.question() against a
+      // freshly-registered once(rl, "close") on every loop iteration (rather
+      // than a single listener hoisted outside the loop) accumulates a
+      // "close" and "error" listener on every turn that doesn't hit EOF.
+      // Blank lines take the loop's `continue` branch, so they exercise many
+      // non-EOF iterations without ever calling runTurn (no real API call).
+      // The trailing "/exit" ends the loop via the ordinary exit path rather
+      // than true stdin EOF.
+      //
+      // Lines are written one at a time via setImmediate (rather than handed
+      // to the stream all at once, e.g. via Readable.from(array)) so readline
+      // processes each "line" event on its own tick instead of seeing the
+      // whole input plus end-of-stream in one go -- the latter causes
+      // readline to close after only the first line, independent of this
+      // fix, which would make the test fail for an unrelated reason.
+      const stdin = new PassThrough();
+      Object.defineProperty(process, "stdin", { value: stdin, configurable: true });
+
+      const inputLines = [...Array(15).fill(""), "/exit"];
+      let lineIndex = 0;
+      const pump = (): void => {
+        if (lineIndex >= inputLines.length) {
+          stdin.end();
+          return;
+        }
+        stdin.write(inputLines[lineIndex] + "\n");
+        lineIndex++;
+        setImmediate(pump);
+      };
+      pump();
+
+      const warnings: string[] = [];
+      const onWarning = (warning: Error) => {
+        if (warning.name === "MaxListenersExceededWarning") {
+          warnings.push(warning.message);
+        }
+      };
+      process.on("warning", onWarning);
+
+      try {
+        await main([]);
+      } finally {
+        process.off("warning", onWarning);
+      }
+
+      expect(warnings).toEqual([]);
+    },
+    5000,
   );
 });
