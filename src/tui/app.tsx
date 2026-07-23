@@ -1,7 +1,15 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { Box, Text, useApp, useInput } from "ink";
+import { Box, Static, Text, useApp, useInput } from "ink";
 import type { ReactElement } from "react";
-import { Banner, Divider, PermissionPrompt, StatusBar, ThinkingView, TranscriptView } from "./components.js";
+import {
+  Banner,
+  Divider,
+  PermissionPrompt,
+  StatusBar,
+  ThinkingView,
+  TranscriptRow,
+  TranscriptView,
+} from "./components.js";
 import {
   EMPTY_TRANSCRIPT,
   appendNotice,
@@ -73,6 +81,12 @@ export function App({
   // Undefined until a provider reports a count -- shown as unknown rather than
   // as zero, since several compatible servers never report usage at all.
   const [usedTokens, setUsedTokens] = useState<number | undefined>(undefined);
+  // How many transcript rows are finished. Everything below this index is
+  // handed to <Static>, which writes each row to the terminal exactly once and
+  // never repaints it. Without that, Ink redraws the whole conversation on
+  // every frame: the scrollback fills with duplicates and the banner is pushed
+  // off the top of a long session.
+  const [settledCount, setSettledCount] = useState(0);
   // A ref, not state: Ctrl-C has to reach the controller for the turn that is
   // actually running, and the keystroke handler closes over whatever value was
   // current when it was created.
@@ -129,6 +143,13 @@ export function App({
         const message = controller.signal.aborted ? "interrupted" : `error: ${errorText(err)}`;
         setTranscript((state) => appendNotice(settlePendingCalls(state, message), message));
       } finally {
+        // Settled only once the turn is over: rows mutate while it runs (text
+        // accumulates, a tool call gains its result), and <Static> would have
+        // already printed the half-finished version.
+        setTranscript((state) => {
+          setSettledCount(state.items.length);
+          return state;
+        });
         abortRef.current = null;
         // A permission question left open by an interrupted turn would swallow
         // every subsequent keystroke, since the prompt captures input while it
@@ -199,10 +220,24 @@ export function App({
     }
   });
 
+  const settled = transcript.items.slice(0, settledCount);
+  const live = transcript.items.slice(settledCount);
+
   return (
     <Box flexDirection="column">
-      <Banner version={version} provider={provider} model={model} cwd={cwd} />
-      <TranscriptView items={transcript.items} frame={frame} />
+      {/* The banner is the first Static entry rather than a plain element, so
+          it scrolls away with the conversation instead of being reprinted at
+          the top of every frame. */}
+      <Static items={[{ key: "banner" } as const, ...settled.map((item, index) => ({ key: `row-${index}`, item }))]}>
+        {(entry) =>
+          "item" in entry ? (
+            <TranscriptRow key={entry.key} item={entry.item} />
+          ) : (
+            <Banner key={entry.key} version={version} provider={provider} model={model} cwd={cwd} />
+          )
+        }
+      </Static>
+      <TranscriptView items={live} frame={frame} />
       <ThinkingView text={transcript.thinking} frame={frame} />
       {showHelp && (
         <Box flexDirection="column" marginTop={1} marginLeft={2}>

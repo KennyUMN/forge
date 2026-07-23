@@ -55,12 +55,13 @@ export function reduceTranscript(state: TranscriptState, event: TurnEvent): Tran
       return { ...state, items: [...state.items, { kind: "tool", call: event.call }] };
     case "tool_result":
       return { ...state, items: attachResult(state.items, event.call, event.result) };
+    // Cleared at both ends of a step so the panel only ever shows reasoning
+    // for a step that is actually running. Clearing on start alone leaves the
+    // final step's reasoning on screen underneath the answer it produced,
+    // where it reads as part of the reply.
     case "step_start":
-      // Cleared per step so the panel shows the current step's reasoning, not
-      // everything the model has thought about since the turn began.
-      return { ...state, thinking: "" };
     case "step_end":
-      return state;
+      return { ...state, thinking: "" };
   }
 }
 

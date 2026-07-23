@@ -1,5 +1,7 @@
 import { Box, Text } from "ink";
 import type { ReactElement } from "react";
+import { parseMarkdown } from "./markdown.js";
+import type { Span } from "./markdown.js";
 import type { TranscriptItem } from "./transcript-model.js";
 import type { ToolCallRequest, ToolResult } from "../types/tool-call.js";
 
@@ -66,6 +68,79 @@ export function ToolRow({
   );
 }
 
+function InlineSpans({ spans }: { spans: Span[] }): ReactElement {
+  return (
+    <Text>
+      {spans.map((span, index) => (
+        <Text key={index} bold={span.bold} italic={span.italic} color={span.code ? "yellow" : undefined}>
+          {span.text}
+        </Text>
+      ))}
+    </Text>
+  );
+}
+
+// Renders the small Markdown subset models actually emit. Without this a reply
+// shows its own syntax -- literal **stars**, ## hashes and ``` fences -- which
+// is exactly the raw text the model meant to format.
+export function Markdown({ source }: { source: string }): ReactElement {
+  const blocks = parseMarkdown(source);
+  return (
+    <Box flexDirection="column">
+      {blocks.map((block, index) => {
+        switch (block.kind) {
+          case "heading":
+            return (
+              <Box key={index} marginTop={index === 0 ? 0 : 1}>
+                <Text bold color={block.level <= 2 ? "cyan" : undefined}>
+                  <InlineSpans spans={block.spans} />
+                </Text>
+              </Box>
+            );
+          case "bullet":
+            return (
+              <Box key={index}>
+                <Text dimColor>{"  " + BULLET + " "}</Text>
+                <InlineSpans spans={block.spans} />
+              </Box>
+            );
+          case "code":
+            return (
+              <Box
+                key={index}
+                flexDirection="column"
+                marginY={1}
+                marginLeft={2}
+                borderStyle="round"
+                borderColor="gray"
+                paddingX={1}
+              >
+                {block.language && <Text dimColor>{block.language}</Text>}
+                {block.lines.map((line, lineIndex) => (
+                  <Text key={lineIndex} color="yellow">
+                    {line || " "}
+                  </Text>
+                ))}
+              </Box>
+            );
+          case "rule":
+            return <Divider key={index} width={40} />;
+          case "paragraph":
+            return (
+              <Box key={index} marginTop={index === 0 ? 0 : 1}>
+                <InlineSpans spans={block.spans} />
+              </Box>
+            );
+        }
+      })}
+    </Box>
+  );
+}
+
+export function TranscriptRow({ item, frame = 0 }: { item: TranscriptItem; frame?: number }): ReactElement {
+  return <TranscriptView items={[item]} frame={frame} />;
+}
+
 export function TranscriptView({ items, frame = 0 }: { items: TranscriptItem[]; frame?: number }): ReactElement {
   return (
     <Box flexDirection="column">
@@ -83,7 +158,7 @@ export function TranscriptView({ items, frame = 0 }: { items: TranscriptItem[]; 
           case "assistant":
             return (
               <Box key={index} marginTop={1}>
-                <Text>{item.text}</Text>
+                <Markdown source={item.text} />
               </Box>
             );
           case "tool":

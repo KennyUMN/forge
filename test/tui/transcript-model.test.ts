@@ -111,6 +111,19 @@ describe("reduceTranscript", () => {
 
     expect(state.thinking).toBe("");
   });
+
+  // Clearing on start alone leaves the final step's reasoning on screen
+  // underneath the answer it produced, where it reads as part of the reply.
+  it("clears thinking when a step ends, not only when the next one starts", () => {
+    const state = reduceAll([
+      { type: "thinking_delta", text: "considering" },
+      { type: "text_delta", text: "the answer" },
+      { type: "step_end", step: 1, finishReason: "completed" },
+    ]);
+
+    expect(state.thinking).toBe("");
+    expect(state.items).toEqual([{ kind: "assistant", text: "the answer" }]);
+  });
 });
 
 describe("appendUserMessage", () => {
