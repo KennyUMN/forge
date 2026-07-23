@@ -17,6 +17,9 @@ export interface CliOptions {
   autoApprove?: boolean;
   caCertPath?: string;
   insecure?: boolean;
+  // undefined means "decide from whether stdin/stdout are a terminal"; the
+  // flags force it either way.
+  tui?: boolean;
 }
 
 // Thrown rather than returned so every caller is forced to handle a bad
@@ -49,6 +52,8 @@ OPTIONS
       --yes                       auto-approve every tool call (see below)
       --ca-cert <path>            trust an extra CA, for self-hosted endpoints
       --insecure                  skip TLS verification for this provider only
+      --tui / --no-tui            force the full-screen UI on or off
+                                  (default: on when stdin and stdout are a tty)
   -h, --help                      show this help
   -v, --version                   show the installed version
 
@@ -155,6 +160,12 @@ export function parseCliArgs(argv: string[]): CliOptions {
         break;
       case "--insecure":
         options.insecure = true;
+        break;
+      case "--tui":
+        options.tui = true;
+        break;
+      case "--no-tui":
+        options.tui = false;
         break;
       default:
         throw new CliUsageError(`Unknown option "${arg}". Run "forge --help" for usage.`);

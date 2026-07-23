@@ -14,10 +14,19 @@ import { loadEnvFiles } from "./env.js";
 import { installRoot, readVersion } from "./install.js";
 import { runUpdate } from "./update.js";
 import { createRenderer } from "./render.js";
+import { runTui } from "../tui/run.js";
 import type { CliOptions } from "./args.js";
 import type { ForgeConfig } from "./config.js";
 
 const SYSTEM_PROMPT = "You are Forge, an agentic coding assistant.";
+
+// --tui and --no-tui override; otherwise the full-screen UI is used whenever
+// both ends are a real terminal, since it cannot draw into a pipe or read keys
+// from a redirected stdin.
+function useTui(options: CliOptions): boolean {
+  if (options.tui !== undefined) return options.tui;
+  return Boolean(process.stdin.isTTY && process.stdout.isTTY);
+}
 
 async function printResolvedConfig(cwd: string, config: ForgeConfig, envFiles: string[]): Promise<void> {
   console.log(`forge ${await readVersion()}`);
@@ -93,6 +102,22 @@ export async function main(argv: string[]): Promise<void> {
       await runOneShot(options, session, provider, registryHandle, cwd);
       return;
     }
+    // The full-screen UI needs a real terminal to draw in and keys to read.
+    // Piped or redirected input falls back to the line-based loop, which is
+    // also what the test suite drives.
+    if (useTui(options)) {
+      await runTui({
+        provider,
+        session,
+        tools: registryHandle.registry.getAll(),
+        cwd,
+        systemPrompt: SYSTEM_PROMPT,
+        model: config.provider.model ?? "(default)",
+        autoApprove: options.autoApprove,
+      });
+      return;
+    }
+
     console.log(`Session: ${session.sessionId}`);
     await runInteractive(options, session, provider, registryHandle, cwd);
   } finally {
