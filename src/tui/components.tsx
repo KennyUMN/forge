@@ -131,22 +131,135 @@ export function PermissionPrompt({ call }: { call: ToolCallRequest }): ReactElem
   );
 }
 
-export interface StatusBarProps {
+// A rule the full width of the terminal, framing the prompt the way the
+// reference CLIs do. Ink gives no "100% width" primitive for a bare character
+// run, so the width is measured and the string built.
+export function Divider({ width = process.stdout.columns || 80 }: { width?: number }): ReactElement {
+  return (
+    <Text dimColor>{"─".repeat(Math.max(1, width))}</Text>
+  );
+}
+
+const LOGO_LINES = ["▄█▀▀█▄", "█▀  ▀█", "█▄▄▄▄▀", "█▀    "];
+
+export interface BannerProps {
+  version: string;
   provider: string;
   model: string;
-  sessionId: string;
+  cwd: string;
+}
+
+export function Banner({ version, provider, model, cwd }: BannerProps): ReactElement {
+  return (
+    <Box marginBottom={1}>
+      <Box flexDirection="column" marginRight={2}>
+        {LOGO_LINES.map((line, index) => (
+          <Text key={index} color={["red", "yellow", "green", "cyan"][index]}>
+            {line}
+          </Text>
+        ))}
+      </Box>
+      <Box flexDirection="column">
+        <Text bold color="cyan">
+          Forge {version}
+        </Text>
+        <Text dimColor>
+          {provider} {MIDDOT} {model}
+        </Text>
+        <Text dimColor>{cwd}</Text>
+        <Text dimColor>? for shortcuts</Text>
+      </Box>
+    </Box>
+  );
+}
+
+const BAR_WIDTH = 12;
+const BAR_FULL = "█";
+const BAR_EMPTY = "░";
+
+export function formatTokens(count: number): string {
+  if (count >= 1_000_000) return `${(count / 1_000_000).toFixed(1)}M`;
+  if (count >= 1_000) return `${Math.round(count / 1_000)}k`;
+  return String(count);
+}
+
+// Returns the filled/empty split rather than a rendered string so the caller
+// can colour the two halves differently.
+export function contextBarCells(used: number, total: number): { filled: number; empty: number; percent: number } {
+  const ratio = total > 0 ? Math.min(1, used / total) : 0;
+  // Rounds up so any non-zero usage shows at least one cell -- a bar reading
+  // completely empty while tokens are being spent is worse than being a cell
+  // optimistic.
+  const filled = used > 0 ? Math.max(1, Math.ceil(ratio * BAR_WIDTH)) : 0;
+  return { filled, empty: BAR_WIDTH - filled, percent: Math.round(ratio * 100) };
+}
+
+export function ContextBar({ used, total }: { used: number; total: number }): ReactElement {
+  const { filled, empty, percent } = contextBarCells(used, total);
+  // Amber past two thirds, red past nine tenths: the point of the bar is to
+  // warn before a turn starts failing on context length, not after.
+  const color = percent >= 90 ? "red" : percent >= 66 ? "yellow" : "green";
+  return (
+    <Text>
+      <Text dimColor>Context: [</Text>
+      <Text color={color}>{BAR_FULL.repeat(filled)}</Text>
+      <Text dimColor>
+        {BAR_EMPTY.repeat(empty)}] {formatTokens(used)}/{formatTokens(total)} ({percent}%)
+      </Text>
+    </Text>
+  );
+}
+
+export interface StatusBarProps {
+  mode: string;
+  provider: string;
+  model: string;
+  branch?: string;
+  usedTokens?: number;
+  contextWindow: number;
   busy: boolean;
   frame: number;
 }
 
-export function StatusBar({ provider, model, sessionId, busy, frame }: StatusBarProps): ReactElement {
-  const state = busy ? `${spinnerFrame(frame)} working` : "ready";
+const MODE_COLORS: Record<string, string> = {
+  ask: "cyan",
+  "accept-edits": "green",
+  auto: "yellow",
+};
+
+export function StatusBar({
+  mode,
+  provider,
+  model,
+  branch,
+  usedTokens,
+  contextWindow,
+  busy,
+  frame,
+}: StatusBarProps): ReactElement {
   return (
-    <Box>
-      <Text dimColor>
-        {state} {MIDDOT} {provider}/{model} {MIDDOT} {sessionId.slice(0, 8)} {MIDDOT} ctrl-c interrupt {MIDDOT} /exit
-        quit
-      </Text>
+    <Box flexDirection="column">
+      <Box>
+        <Text color={MODE_COLORS[mode] ?? "white"} bold>
+          [{mode}]
+        </Text>
+        <Text dimColor>
+          {" "}
+          | {provider}/{model} |{" "}
+        </Text>
+        {usedTokens === undefined ? (
+          <Text dimColor>Context: (not reported)</Text>
+        ) : (
+          <ContextBar used={usedTokens} total={contextWindow} />
+        )}
+        <Text dimColor> | {branch ? `⎇ ${branch}` : "no git"}</Text>
+      </Box>
+      <Box>
+        <Text dimColor>
+          {busy ? `${spinnerFrame(frame)} working ${MIDDOT} ctrl-c interrupt` : "shift+tab cycle mode"} {MIDDOT} /exit
+          quit
+        </Text>
+      </Box>
     </Box>
   );
 }

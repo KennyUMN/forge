@@ -113,6 +113,8 @@ export async function main(argv: string[]): Promise<void> {
         cwd,
         systemPrompt: SYSTEM_PROMPT,
         model: config.provider.model ?? "(default)",
+        version: await readVersion(),
+        contextWindow: config.provider.contextWindow,
         autoApprove: options.autoApprove,
       });
       return;

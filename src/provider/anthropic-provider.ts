@@ -126,6 +126,14 @@ export class AnthropicProvider implements ModelProvider {
       type: "finish",
       reason: mapFinishReason(finalMessage.stop_reason),
       rawReason: finalMessage.stop_reason ?? "unknown",
+      ...(finalMessage.usage
+        ? {
+            usage: {
+              inputTokens: finalMessage.usage.input_tokens ?? 0,
+              outputTokens: finalMessage.usage.output_tokens ?? 0,
+            },
+          }
+        : {}),
     };
   }
 

@@ -28,3 +28,43 @@ export const askBeforeWriteOrBashPolicy: PermissionPolicy = {
 };
 
 export const DEFAULT_PERMISSION_POLICIES: PermissionPolicy[] = [autoAllowReadOnlyPolicy, askBeforeWriteOrBashPolicy];
+
+// Editing a file is reversible -- the change is on disk, visible to git, and
+// undoable. Running a shell command is not, so accept-edits stops short of it
+// rather than treating "writes" and "commands" as one category.
+const EDIT_TOOL_NAMES = new Set(["write_file", "edit_file"]);
+
+export const autoAllowEditsPolicy: PermissionPolicy = {
+  name: "auto-allow-edits",
+  evaluate(call) {
+    return EDIT_TOOL_NAMES.has(call.name) ? "allow" : undefined;
+  },
+};
+
+export const allowEverythingPolicy: PermissionPolicy = {
+  name: "allow-everything",
+  evaluate() {
+    return "allow";
+  },
+};
+
+// The modes a user cycles through at the prompt. Ordered from most to least
+// supervised, which is the order shift+tab moves in.
+export const PERMISSION_MODES = ["ask", "accept-edits", "auto"] as const;
+
+export type PermissionMode = (typeof PERMISSION_MODES)[number];
+
+export function nextPermissionMode(mode: PermissionMode): PermissionMode {
+  return PERMISSION_MODES[(PERMISSION_MODES.indexOf(mode) + 1) % PERMISSION_MODES.length];
+}
+
+export function policiesForMode(mode: PermissionMode): PermissionPolicy[] {
+  switch (mode) {
+    case "auto":
+      return [allowEverythingPolicy];
+    case "accept-edits":
+      return [autoAllowReadOnlyPolicy, autoAllowEditsPolicy, askBeforeWriteOrBashPolicy];
+    case "ask":
+      return DEFAULT_PERMISSION_POLICIES;
+  }
+}

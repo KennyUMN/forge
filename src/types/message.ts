@@ -34,8 +34,18 @@ export interface ToolSchema {
 
 export type FinishReason = "completed" | "tool_calls" | "truncated" | "filtered" | "other";
 
+export interface TokenUsage {
+  // What the model actually read for this request -- the whole conversation so
+  // far, not just the latest message. This is the number that fills a context
+  // window, so it is what a usage indicator has to show.
+  inputTokens: number;
+  outputTokens: number;
+}
+
 export type StreamEvent =
   | { type: "text_delta"; text: string }
   | { type: "thinking_delta"; text: string }
   | { type: "tool_call"; id: string; name: string; input: unknown }
-  | { type: "finish"; reason: FinishReason; rawReason: string };
+  // usage is optional because not every compatible server reports it, and a
+  // missing count must degrade to "unknown" rather than to a wrong zero.
+  | { type: "finish"; reason: FinishReason; rawReason: string; usage?: TokenUsage };

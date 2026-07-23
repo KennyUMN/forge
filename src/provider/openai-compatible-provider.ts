@@ -2,7 +2,7 @@ import OpenAI from "openai";
 import { readFileSync } from "node:fs";
 import { Agent, fetch as undiciFetch } from "undici";
 import type { ModelProvider, StreamContext } from "./model-provider.js";
-import type { FinishReason, Message, MessageContent, StreamEvent, ToolSchema } from "../types/message.js";
+import type { FinishReason, Message, MessageContent, StreamEvent, TokenUsage, ToolSchema } from "../types/message.js";
 
 type ChatCompletionCreateParams = Parameters<OpenAI["chat"]["completions"]["stream"]>[0];
 
@@ -89,6 +89,9 @@ interface AccumulatedToolCall {
 // and every field here must be treated as optional -- compatible servers vary
 // in which ones they send.
 interface StreamChunk {
+  // Arrives in its own trailing chunk, which carries an empty choices array --
+  // so usage must be read from every chunk, not only from ones with content.
+  usage?: { prompt_tokens?: number; completion_tokens?: number } | null;
   choices?: {
     delta?: {
       content?: string | null;
@@ -180,6 +183,10 @@ export class OpenAiCompatibleProvider implements ModelProvider {
       messages: toOpenAiMessages(context.messages, context.systemPrompt),
       tools: toOpenAiTools(context.tools),
       stream: true,
+      // Without this a streamed response reports no usage at all. Servers that
+      // do not recognise the option ignore it, and the absent usage is handled
+      // the same as any other missing count.
+      stream_options: { include_usage: true },
       ...(this.options.maxTokens ? { max_tokens: this.options.maxTokens } : {}),
     } as ChatCompletionCreateParams;
 
@@ -200,8 +207,16 @@ export class OpenAiCompatibleProvider implements ModelProvider {
     // identifies which call a fragment belongs to.
     const toolCalls = new Map<number, AccumulatedToolCall>();
     let rawFinishReason: string | null = null;
+    let usage: TokenUsage | undefined;
 
     for await (const chunk of openaiStream) {
+      if (chunk.usage) {
+        usage = {
+          inputTokens: chunk.usage.prompt_tokens ?? 0,
+          outputTokens: chunk.usage.completion_tokens ?? 0,
+        };
+      }
+
       const choice = chunk.choices?.[0];
       if (!choice) continue;
       const delta = choice.delta;
@@ -246,6 +261,7 @@ export class OpenAiCompatibleProvider implements ModelProvider {
       type: "finish",
       reason: mapFinishReason(rawFinishReason),
       rawReason: rawFinishReason ?? "unknown",
+      usage,
     };
   }
 

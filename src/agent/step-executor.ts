@@ -1,5 +1,5 @@
 import type { ModelProvider, StreamContext } from "../provider/model-provider.js";
-import type { FinishReason } from "../types/message.js";
+import type { FinishReason, TokenUsage } from "../types/message.js";
 import type { ToolCallRequest } from "../types/tool-call.js";
 import type { TurnEventHandler } from "./turn-events.js";
 
@@ -7,6 +7,7 @@ export interface StepResult {
   text: string;
   toolCalls: ToolCallRequest[];
   finishReason: FinishReason;
+  usage?: TokenUsage;
 }
 
 export interface StepCallbacks {
@@ -27,6 +28,7 @@ export async function executeStep(
   let text = "";
   const toolCalls: ToolCallRequest[] = [];
   let finishReason: FinishReason = "other";
+  let usage: TokenUsage | undefined;
 
   for await (const event of provider.stream(context)) {
     if (event.type === "text_delta") {
@@ -40,8 +42,9 @@ export async function executeStep(
       toolCalls.push({ id: event.id, name: event.name, input: event.input });
     } else if (event.type === "finish") {
       finishReason = event.reason;
+      usage = event.usage;
     }
   }
 
-  return { text, toolCalls, finishReason };
+  return { text, toolCalls, finishReason, usage };
 }

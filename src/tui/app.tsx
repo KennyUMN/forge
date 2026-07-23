@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { Box, Text, useApp, useInput } from "ink";
 import type { ReactElement } from "react";
-import { PermissionPrompt, StatusBar, ThinkingView, TranscriptView } from "./components.js";
+import { Banner, Divider, PermissionPrompt, StatusBar, ThinkingView, TranscriptView } from "./components.js";
 import {
   EMPTY_TRANSCRIPT,
   appendNotice,
@@ -9,6 +9,8 @@ import {
   reduceTranscript,
   settlePendingCalls,
 } from "./transcript-model.js";
+import { nextPermissionMode } from "../permission/permission-policies.js";
+import type { PermissionMode } from "../permission/permission-policies.js";
 import type { TranscriptState } from "./transcript-model.js";
 import type { TurnEvent } from "../agent/turn-events.js";
 import type { ToolCallRequest } from "../types/tool-call.js";
@@ -16,8 +18,17 @@ import type { ToolCallRequest } from "../types/tool-call.js";
 const SPINNER_INTERVAL_MS = 80;
 const PROMPT_CHEVRON = "›";
 
+const SHORTCUTS = [
+  "enter      send",
+  "shift+tab  cycle permission mode (ask / accept-edits / auto)",
+  "ctrl-c     interrupt the running turn, or quit when idle",
+  "?          toggle this help (when the prompt is empty)",
+  "/exit      quit",
+];
+
 export interface TurnRunnerInput {
   text: string;
+  mode: PermissionMode;
   onEvent: (event: TurnEvent) => void;
   signal: AbortSignal;
   ask: (call: ToolCallRequest) => Promise<boolean>;
@@ -26,9 +37,13 @@ export interface TurnRunnerInput {
 export type TurnRunner = (input: TurnRunnerInput) => Promise<{ stoppedReason: string }>;
 
 export interface AppProps {
+  version: string;
   provider: string;
   model: string;
-  sessionId: string;
+  cwd: string;
+  branch?: string;
+  contextWindow: number;
+  initialMode?: PermissionMode;
   runTurn: TurnRunner;
 }
 
@@ -37,17 +52,35 @@ interface PendingPermission {
   resolve: (approved: boolean) => void;
 }
 
-export function App({ provider, model, sessionId, runTurn }: AppProps): ReactElement {
+export function App({
+  version,
+  provider,
+  model,
+  cwd,
+  branch,
+  contextWindow,
+  initialMode = "ask",
+  runTurn,
+}: AppProps): ReactElement {
   const { exit } = useApp();
   const [transcript, setTranscript] = useState<TranscriptState>(EMPTY_TRANSCRIPT);
   const [input, setInput] = useState("");
   const [busy, setBusy] = useState(false);
   const [pending, setPending] = useState<PendingPermission | null>(null);
   const [frame, setFrame] = useState(0);
+  const [mode, setMode] = useState<PermissionMode>(initialMode);
+  const [showHelp, setShowHelp] = useState(false);
+  // Undefined until a provider reports a count -- shown as unknown rather than
+  // as zero, since several compatible servers never report usage at all.
+  const [usedTokens, setUsedTokens] = useState<number | undefined>(undefined);
   // A ref, not state: Ctrl-C has to reach the controller for the turn that is
   // actually running, and the keystroke handler closes over whatever value was
   // current when it was created.
   const abortRef = useRef<AbortController | null>(null);
+  // Likewise the mode: a turn reads it when it starts, and the handler that
+  // starts it must not see a stale copy from an earlier render.
+  const modeRef = useRef(mode);
+  modeRef.current = mode;
 
   // Ticking only while something is in flight keeps an idle forge from
   // repainting the screen twelve times a second for a spinner nobody is
@@ -76,7 +109,14 @@ export function App({ provider, model, sessionId, runTurn }: AppProps): ReactEle
       try {
         const result = await runTurn({
           text,
-          onEvent: (event) => setTranscript((state) => reduceTranscript(state, event)),
+          mode: modeRef.current,
+          onEvent: (event) => {
+            // Input tokens are the whole conversation the model just read, so
+            // the latest step's count is the current context usage -- not
+            // something to accumulate across steps.
+            if (event.type === "step_end" && event.usage) setUsedTokens(event.usage.inputTokens);
+            setTranscript((state) => reduceTranscript(state, event));
+          },
           signal: controller.signal,
           ask,
         });
@@ -112,6 +152,13 @@ export function App({ provider, model, sessionId, runTurn }: AppProps): ReactEle
       return;
     }
 
+    // Allowed mid-turn: the mode is read when the *next* turn starts, so
+    // changing it while one runs is harmless and saves waiting for it.
+    if (key.tab && key.shift) {
+      setMode(nextPermissionMode(modeRef.current));
+      return;
+    }
+
     if (pending) {
       const answer = char.toLowerCase();
       if (answer === "y" || answer === "n") {
@@ -141,6 +188,12 @@ export function App({ provider, model, sessionId, runTurn }: AppProps): ReactEle
       setInput((current) => current.slice(0, -1));
       return;
     }
+    // Only when the prompt is empty, so a "?" typed inside a question reaches
+    // the model instead of opening the help.
+    if (char === "?" && input === "") {
+      setShowHelp((current) => !current);
+      return;
+    }
     if (char && !key.ctrl && !key.meta && !key.escape) {
       setInput((current) => current + char);
     }
@@ -148,14 +201,25 @@ export function App({ provider, model, sessionId, runTurn }: AppProps): ReactEle
 
   return (
     <Box flexDirection="column">
+      <Banner version={version} provider={provider} model={model} cwd={cwd} />
       <TranscriptView items={transcript.items} frame={frame} />
       <ThinkingView text={transcript.thinking} frame={frame} />
-      {pending ? (
-        <Box marginTop={1}>
-          <PermissionPrompt call={pending.call} />
+      {showHelp && (
+        <Box flexDirection="column" marginTop={1} marginLeft={2}>
+          {SHORTCUTS.map((line) => (
+            <Text key={line} dimColor>
+              {line}
+            </Text>
+          ))}
         </Box>
+      )}
+      <Box marginTop={1}>
+        <Divider />
+      </Box>
+      {pending ? (
+        <PermissionPrompt call={pending.call} />
       ) : (
-        <Box marginTop={1}>
+        <Box>
           <Text bold color={busy ? "gray" : "green"}>
             {PROMPT_CHEVRON}{" "}
           </Text>
@@ -163,7 +227,17 @@ export function App({ provider, model, sessionId, runTurn }: AppProps): ReactEle
           {!busy && <Text inverse> </Text>}
         </Box>
       )}
-      <StatusBar provider={provider} model={model} sessionId={sessionId} busy={busy} frame={frame} />
+      <Divider />
+      <StatusBar
+        mode={mode}
+        provider={provider}
+        model={model}
+        branch={branch}
+        usedTokens={usedTokens}
+        contextWindow={contextWindow}
+        busy={busy}
+        frame={frame}
+      />
     </Box>
   );
 }

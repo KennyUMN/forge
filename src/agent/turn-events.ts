@@ -1,4 +1,4 @@
-import type { FinishReason } from "../types/message.js";
+import type { FinishReason, TokenUsage } from "../types/message.js";
 import type { ToolCallRequest, ToolResult } from "../types/tool-call.js";
 
 // One stream of events describing a turn as it happens, rather than a callback
@@ -19,6 +19,8 @@ export type TurnEvent =
   // Carries the originating call, not just the id, so a renderer can label the
   // result without keeping its own map of in-flight calls.
   | { type: "tool_result"; call: ToolCallRequest; result: ToolResult }
-  | { type: "step_end"; step: number; finishReason: FinishReason };
+  // usage is absent when the provider did not report any; a renderer must show
+  // that as unknown rather than as zero tokens used.
+  | { type: "step_end"; step: number; finishReason: FinishReason; usage?: TokenUsage };
 
 export type TurnEventHandler = (event: TurnEvent) => void;

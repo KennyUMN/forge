@@ -23,6 +23,10 @@ export interface ProviderConfig {
   // for this provider's connections entirely.
   caCertPath?: string;
   insecureSkipTlsVerify?: boolean;
+  // Denominator for the context-usage indicator. Model metadata forge has no
+  // catalogue for, so it is configured rather than inferred; omitted means the
+  // UI falls back to a conservative default.
+  contextWindow?: number;
 }
 
 export interface ForgeConfig {

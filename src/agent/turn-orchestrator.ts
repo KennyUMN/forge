@@ -84,7 +84,7 @@ export async function runTurn(userText: string, options: TurnOrchestratorOptions
       { systemPrompt, messages: sessionEntriesToMessages(session.getEntries()), tools: toolSchemas, signal },
       { onEvent },
     );
-    onEvent?.({ type: "step_end", step, finishReason: stepResult.finishReason });
+    onEvent?.({ type: "step_end", step, finishReason: stepResult.finishReason, usage: stepResult.usage });
 
     if (stepResult.text) {
       await session.append("assistant_message", { text: stepResult.text });

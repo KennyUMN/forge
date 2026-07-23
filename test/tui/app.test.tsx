@@ -6,11 +6,19 @@ import type { TurnRunner } from "../../src/tui/app.js";
 // Deliberately not starting with letters that appear in the assertions below:
 // the status bar prints a session prefix, and a short id like "abcdef12" makes
 // a substring assertion for typed text pass for the wrong reason.
-const BASE_PROPS = { provider: "9router", model: "ComboOP", sessionId: "5f0e9d8c-1234-5678" };
+const BASE_PROPS = {
+  version: "0.1.0",
+  provider: "9router",
+  model: "ComboOP",
+  cwd: "/work/forge",
+  contextWindow: 200_000,
+};
 
 const ENTER = "\r";
 const BACKSPACE = "\x7f";
 const CTRL_C = "\x03";
+// CSI Z: the sequence a terminal sends for shift+tab.
+const SHIFT_TAB = "\x1b[Z";
 
 const completed = { stoppedReason: "completed" };
 
@@ -40,12 +48,71 @@ async function submit(stdin: Stdin, text: string): Promise<void> {
 }
 
 describe("App", () => {
-  it("shows the status bar with provider, model and session", () => {
+  it("shows the banner and status bar", () => {
     const { lastFrame } = renderApp(async () => completed);
 
+    expect(lastFrame()).toContain("Forge 0.1.0");
     expect(lastFrame()).toContain("9router/ComboOP");
-    expect(lastFrame()).toContain("5f0e9d8c");
-    expect(lastFrame()).toContain("ready");
+    expect(lastFrame()).toContain("[ask]");
+  });
+
+  it("cycles the permission mode on shift+tab", async () => {
+    const { stdin, lastFrame } = renderApp(async () => completed);
+
+    expect(lastFrame()).toContain("[ask]");
+    await type(stdin, SHIFT_TAB);
+    expect(lastFrame()).toContain("[accept-edits]");
+    await type(stdin, SHIFT_TAB);
+    expect(lastFrame()).toContain("[auto]");
+    await type(stdin, SHIFT_TAB);
+    expect(lastFrame()).toContain("[ask]");
+  });
+
+  it("runs the next turn under the mode showing at the time it starts", async () => {
+    const runTurn = vi.fn<TurnRunner>(async () => completed);
+    const { stdin } = renderApp(runTurn);
+
+    await type(stdin, SHIFT_TAB);
+    await submit(stdin, "go");
+
+    expect(runTurn.mock.calls[0][0].mode).toBe("accept-edits");
+  });
+
+  // The whole point of the context bar: a provider that reports nothing must
+  // not render as 0% used, which reads as the opposite of the truth.
+  it("shows context usage once a step reports it, and says so until then", async () => {
+    const { stdin, lastFrame } = renderApp(async ({ onEvent }) => {
+      onEvent({
+        type: "step_end",
+        step: 1,
+        finishReason: "completed",
+        usage: { inputTokens: 50_000, outputTokens: 120 },
+      });
+      return completed;
+    });
+
+    expect(lastFrame()).toContain("not reported");
+
+    await submit(stdin, "go");
+
+    expect(lastFrame()).toContain("50k/200k");
+    expect(lastFrame()).toContain("25%");
+  });
+
+  it("toggles the shortcut help with ? only when the prompt is empty", async () => {
+    const { stdin, lastFrame } = renderApp(async () => completed);
+
+    await type(stdin, "?");
+    expect(lastFrame()).toContain("cycle permission mode");
+
+    await type(stdin, "?");
+    expect(lastFrame()).not.toContain("cycle permission mode");
+
+    // Typed inside a question it is ordinary text, not a shortcut.
+    await type(stdin, "what");
+    await type(stdin, "?");
+    expect(lastFrame()).toContain("what?");
+    expect(lastFrame()).not.toContain("cycle permission mode");
   });
 
   it("echoes typed characters into the prompt", async () => {
@@ -208,7 +275,8 @@ describe("App", () => {
     await submit(stdin, "go");
 
     expect(lastFrame()).toContain("provider exploded");
-    expect(lastFrame()).toContain("ready");
+    // Back to accepting input rather than stuck showing the interrupt hint.
+    expect(lastFrame()).toContain("shift+tab cycle mode");
   });
 
   it("notes when a turn stopped on the step limit", async () => {
