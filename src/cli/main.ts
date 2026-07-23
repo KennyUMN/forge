@@ -19,8 +19,15 @@ export async function main(argv: string[]): Promise<void> {
   const session = await resolveSession(sessionsDir, args);
   console.log(`Session: ${session.sessionId}`);
 
-  const registryHandle = await buildToolRegistry(config.mcpServers);
+  // buildProvider() must run before buildToolRegistry(): it throws (via
+  // requireEnv) if the configured provider's API key env var is missing, and
+  // buildToolRegistry() spawns MCP server subprocesses that are only closed
+  // in the finally block below. Building the provider first keeps that
+  // failure fail-fast, before anything spawns -- ordering them the other way
+  // around would leak a spawned MCP subprocess whenever the API key is
+  // missing or misnamed.
   const provider = buildProvider(config.provider);
+  const registryHandle = await buildToolRegistry(config.mcpServers);
 
   const rl = createInterface({ input: process.stdin, output: process.stdout });
 
