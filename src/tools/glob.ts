@@ -1,7 +1,7 @@
 import { glob } from "glob";
 import { join, relative } from "node:path";
 import type { Tool, ToolExecutionContext, ToolExecutionResult } from "../tool/tool.js";
-import { resolvePath } from "./path-utils.js";
+import { resolvePath, toPosixPath } from "./path-utils.js";
 import { DEFAULT_IGNORE } from "./shared.js";
 
 const MAX_RESULTS = 200;
@@ -36,7 +36,7 @@ async function execute(input: unknown, context: ToolExecutionContext): Promise<T
 
   const truncated = matches.length > MAX_RESULTS;
   const shown = truncated ? matches.slice(0, MAX_RESULTS) : matches;
-  const lines = shown.map((match) => relative(context.cwd, join(root, match)));
+  const lines = shown.map((match) => toPosixPath(relative(context.cwd, join(root, match))));
   const suffix = truncated ? `\n... ${matches.length - MAX_RESULTS} more match(es) not shown; narrow the pattern.` : "";
 
   return { output: lines.join("\n") + suffix, isError: false };

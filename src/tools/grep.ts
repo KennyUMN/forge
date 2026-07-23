@@ -2,7 +2,7 @@ import { glob } from "glob";
 import { readFile } from "node:fs/promises";
 import { join, relative } from "node:path";
 import type { Tool, ToolExecutionContext, ToolExecutionResult } from "../tool/tool.js";
-import { resolvePath } from "./path-utils.js";
+import { resolvePath, toPosixPath } from "./path-utils.js";
 import { DEFAULT_IGNORE } from "./shared.js";
 
 const DEFAULT_FILE_PATTERN = "**/*";
@@ -71,7 +71,7 @@ async function execute(input: unknown, context: ToolExecutionContext): Promise<T
   const allMatches: Match[] = [];
   for (const file of files) {
     const absolutePath = join(root, file);
-    const relativePath = relative(context.cwd, absolutePath);
+    const relativePath = toPosixPath(relative(context.cwd, absolutePath));
     allMatches.push(...(await searchFile(absolutePath, relativePath, regex)));
     // Only stop once strictly over the cap, so a file landing exactly on
     // MAX_MATCHES doesn't cause later matches to be dropped without notice

@@ -39,6 +39,20 @@ describe("grepTool", () => {
     expect(result.output).toContain("No matches found");
   });
 
+  // The model feeds reported paths straight back into glob patterns, which are
+  // POSIX-only, so a nested match must not come back as "nested\d.ts". Every
+  // other fixture in this file sits at the root, where relative() emits no
+  // separator at all and a platform-native path would go unnoticed.
+  it("reports nested paths with forward slashes on every platform", async () => {
+    await mkdir(join(dir, "nested"), { recursive: true });
+    await writeFile(join(dir, "nested", "d.ts"), "function foo() {}\n", "utf8");
+
+    const result = await grepTool.execute({ pattern: "function foo" }, { cwd: dir });
+
+    expect(result.output).toContain("nested/d.ts:1:");
+    expect(result.output).not.toContain("nested\\d.ts");
+  });
+
   it("returns an error result for an invalid regular expression", async () => {
     const result = await grepTool.execute({ pattern: "(unclosed" }, { cwd: dir });
 

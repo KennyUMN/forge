@@ -1,6 +1,7 @@
 import { exec } from "node:child_process";
 import { promisify } from "node:util";
 import type { Tool, ToolExecutionContext, ToolExecutionResult } from "../tool/tool.js";
+import { resolveShell } from "./shell.js";
 
 const execAsync = promisify(exec);
 
@@ -22,6 +23,9 @@ async function execute(input: unknown, context: ToolExecutionContext): Promise<T
       cwd: context.cwd,
       timeout: DEFAULT_TIMEOUT_MS,
       maxBuffer: MAX_BUFFER_BYTES,
+      // undefined means "use exec()'s per-platform default"; on Windows this
+      // resolves to Git Bash so the model writes POSIX commands everywhere.
+      shell: resolveShell(),
     });
     const output = [stdout, stderr].filter((part) => part.length > 0).join("\n");
     return { output: output.length > 0 ? output : "(command produced no output)", isError: false };
