@@ -7,6 +7,7 @@ import type { ToolSchema } from "../types/message.js";
 import { sessionEntriesToMessages } from "./session-bridge.js";
 import { executeStep } from "./step-executor.js";
 import { dispatchToolCalls } from "./tool-dispatcher.js";
+import type { TurnEventHandler } from "./turn-events.js";
 
 const DEFAULT_MAX_STEPS = 50;
 
@@ -18,10 +19,15 @@ export interface TurnOrchestratorOptions {
   systemPrompt: string;
   toolContext: ToolExecutionContext;
   maxSteps?: number;
-  onTextDelta?: (text: string) => void;
+  onEvent?: TurnEventHandler;
+  // Aborted when the user interrupts. Threaded into the provider stream and
+  // the tool context so an interrupt reaches whatever is actually blocking,
+  // and checked between steps so the loop stops rather than starting another
+  // model round-trip after the request it was waiting on was cancelled.
+  signal?: AbortSignal;
 }
 
-export type TurnStoppedReason = "completed" | "max_steps_reached";
+export type TurnStoppedReason = "completed" | "max_steps_reached" | "aborted";
 
 export interface TurnResult {
   finalText: string;
@@ -54,17 +60,31 @@ function failTruncatedToolCalls(calls: readonly ToolCallRequest[]): ToolResult[]
 // with no further tool calls, or when maxSteps is exhausted as a safety bound
 // against a runaway tool-calling loop.
 export async function runTurn(userText: string, options: TurnOrchestratorOptions): Promise<TurnResult> {
-  const { provider, session, tools, gate, systemPrompt, toolContext, onTextDelta } = options;
+  const { provider, session, tools, gate, systemPrompt, toolContext, onEvent, signal } = options;
   const maxSteps = options.maxSteps ?? DEFAULT_MAX_STEPS;
   const toolSchemas = toolsToSchemas(tools);
 
   await session.append("user_message", { text: userText });
 
+  // The tool context the caller supplied may predate the turn, so the turn's
+  // own signal is what tools must see -- otherwise an interrupt reaches the
+  // provider but not the bash command it is waiting on.
+  const contextWithSignal = signal ? { ...toolContext, signal } : toolContext;
+
   let callHistory: ToolCallRequest[] = [];
 
   for (let step = 1; step <= maxSteps; step++) {
-    const messages = sessionEntriesToMessages(session.getEntries());
-    const stepResult = await executeStep(provider, { systemPrompt, messages, tools: toolSchemas }, { onTextDelta });
+    if (signal?.aborted) {
+      return { finalText: "", stepsExecuted: step - 1, stoppedReason: "aborted" };
+    }
+    onEvent?.({ type: "step_start", step });
+
+    const stepResult = await executeStep(
+      provider,
+      { systemPrompt, messages: sessionEntriesToMessages(session.getEntries()), tools: toolSchemas, signal },
+      { onEvent },
+    );
+    onEvent?.({ type: "step_end", step, finishReason: stepResult.finishReason });
 
     if (stepResult.text) {
       await session.append("assistant_message", { text: stepResult.text });
@@ -82,7 +102,14 @@ export async function runTurn(userText: string, options: TurnOrchestratorOptions
     if (stepResult.finishReason === "truncated") {
       results = failTruncatedToolCalls(stepResult.toolCalls);
     } else {
-      const outcome = await dispatchToolCalls(stepResult.toolCalls, tools, gate, callHistory, toolContext);
+      const outcome = await dispatchToolCalls(
+        stepResult.toolCalls,
+        tools,
+        gate,
+        callHistory,
+        contextWithSignal,
+        onEvent,
+      );
       results = outcome.results;
       callHistory = outcome.callHistory;
     }

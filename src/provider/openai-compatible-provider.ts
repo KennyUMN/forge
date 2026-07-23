@@ -191,7 +191,9 @@ export class OpenAiCompatibleProvider implements ModelProvider {
     // a single token reaches the caller. Accumulating here instead means the
     // provider tolerates any server that gets the *content* right, which is
     // the whole point of an openai-compatible provider.
-    const openaiStream = (await this.client.chat.completions.create(params)) as unknown as AsyncIterable<StreamChunk>;
+    const openaiStream = (await this.client.chat.completions.create(params, {
+      signal: context.signal,
+    })) as unknown as AsyncIterable<StreamChunk>;
 
     // Keyed by the `index` field rather than by array position: tool-call
     // fragments for several calls interleave across chunks, and only `index`

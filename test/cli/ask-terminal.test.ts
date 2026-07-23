@@ -1,6 +1,12 @@
 import { describe, it, expect, vi } from "vitest";
 import { createInterface } from "node:readline/promises";
-import { parseYesNo, formatAskPrompt, askTerminal, createSharedAskFn } from "../../src/cli/ask-terminal.js";
+import {
+  parseYesNo,
+  formatAskPrompt,
+  askTerminal,
+  createSharedAskFn,
+  questionOrNull,
+} from "../../src/cli/ask-terminal.js";
 import type { Interface } from "node:readline/promises";
 
 // Mocked so askTerminal's own createInterface call can be controlled --
@@ -94,5 +100,45 @@ describe("createSharedAskFn", () => {
     const approved = await ask({ id: "1", name: "bash", input: {} });
 
     expect(approved).toBe(false);
+  });
+});
+
+describe("questionOrNull", () => {
+  const never = new Promise<null>(() => {});
+
+  it("returns the answer when the interface is open", async () => {
+    const rl = { question: async () => "hello" } as unknown as Interface;
+
+    expect(await questionOrNull(rl, never, "> ")).toBe("hello");
+  });
+
+  it("returns null when the closed signal wins the race", async () => {
+    const rl = { question: () => new Promise<string>(() => {}) } as unknown as Interface;
+
+    expect(await questionOrNull(rl, Promise.resolve(null), "> ")).toBeNull();
+  });
+
+  // The end of piped input: stdin ends while a turn is still running, so the
+  // next iteration questions an interface that has already closed. readline
+  // rejects rather than hanging, and racing the "close" signal cannot catch it
+  // because the close already happened.
+  it("returns null when the interface has already closed", async () => {
+    const rl = {
+      question: async () => {
+        throw new Error("readline was closed");
+      },
+    } as unknown as Interface;
+
+    expect(await questionOrNull(rl, never, "> ")).toBeNull();
+  });
+
+  it("propagates any other rejection rather than swallowing it as EOF", async () => {
+    const rl = {
+      question: async () => {
+        throw new Error("something else went wrong");
+      },
+    } as unknown as Interface;
+
+    await expect(questionOrNull(rl, never, "> ")).rejects.toThrow(/something else/);
   });
 });

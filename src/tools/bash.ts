@@ -26,11 +26,18 @@ async function execute(input: unknown, context: ToolExecutionContext): Promise<T
       // undefined means "use exec()'s per-platform default"; on Windows this
       // resolves to Git Bash so the model writes POSIX commands everywhere.
       shell: resolveShell(),
+      signal: context.signal,
     });
     const output = [stdout, stderr].filter((part) => part.length > 0).join("\n");
     return { output: output.length > 0 ? output : "(command produced no output)", isError: false };
   } catch (err) {
     const execError = err as NodeJS.ErrnoException & { stdout?: string; stderr?: string; killed?: boolean; signal?: string };
+    // Checked before the timeout branch: an abort also kills the child with
+    // SIGTERM, so the two are indistinguishable by signal alone and a
+    // user-interrupted command would otherwise be reported as a timeout.
+    if (context.signal?.aborted) {
+      return { output: `Command interrupted: ${command}`, isError: true };
+    }
     if (execError.killed && execError.signal === "SIGTERM") {
       return { output: `Command timed out after ${DEFAULT_TIMEOUT_MS}ms: ${command}`, isError: true };
     }

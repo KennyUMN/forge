@@ -26,6 +26,25 @@ export async function askTerminal(call: ToolCallRequest): Promise<boolean> {
   }
 }
 
+// rl.question() rejects with "readline was closed" when the interface has
+// already closed, which is the ordinary end of piped input: stdin ends while a
+// turn is still running, so the next iteration asks a dead interface. Racing
+// against the caller's `closed` signal only covers a close that happens
+// *during* the question, not one that already happened -- so both are needed,
+// and both mean the same thing: no more input, resolve to null.
+export async function questionOrNull(
+  rl: Interface,
+  closed: Promise<null>,
+  prompt: string,
+): Promise<string | null> {
+  try {
+    return await Promise.race([rl.question(prompt), closed]);
+  } catch (err) {
+    if (err instanceof Error && /readline was closed/i.test(err.message)) return null;
+    throw err;
+  }
+}
+
 // Builds an ask function that reuses an already-open readline Interface
 // instead of creating its own, and races its question against the same
 // `closed` signal the caller's own prompt loop uses -- so a permission

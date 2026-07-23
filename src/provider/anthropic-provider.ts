@@ -102,7 +102,7 @@ export class AnthropicProvider implements ModelProvider {
       ...(thinking ? { thinking } : {}),
     } as AnthropicStreamParams;
 
-    const anthropicStream = this.client.messages.stream(params);
+    const anthropicStream = this.client.messages.stream(params, { signal: context.signal });
 
     for await (const event of anthropicStream) {
       if (event.type === "content_block_delta") {

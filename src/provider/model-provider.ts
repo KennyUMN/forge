@@ -4,6 +4,9 @@ export interface StreamContext {
   systemPrompt: string;
   messages: Message[];
   tools: ToolSchema[];
+  // Aborted when the user interrupts the turn. Without it, Ctrl-C during a
+  // long response stops the loop but leaves the request streaming to nowhere.
+  signal?: AbortSignal;
 }
 
 export interface ModelProvider {

@@ -58,7 +58,9 @@ describe("CLI wiring end-to-end (fake model, real everything else)", () => {
       gate,
       systemPrompt: "",
       toolContext: { cwd: dir },
-      onTextDelta: (text) => streamed.push(text),
+      onEvent: (event) => {
+        if (event.type === "text_delta") streamed.push(event.text);
+      },
     });
 
     expect(result.stoppedReason).toBe("completed");

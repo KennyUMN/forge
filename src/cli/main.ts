@@ -7,12 +7,13 @@ import { runTurn } from "../agent/turn-orchestrator.js";
 import { buildToolRegistry } from "./build-registry.js";
 import { buildProvider } from "./build-provider.js";
 import { globalConfigPath, loadConfig } from "./config.js";
-import { createSharedAskFn } from "./ask-terminal.js";
+import { createSharedAskFn, questionOrNull } from "./ask-terminal.js";
 import { resolveSession } from "./resolve-session.js";
 import { CliUsageError, HELP_TEXT, parseCliArgs } from "./args.js";
 import { loadEnvFiles } from "./env.js";
 import { installRoot, readVersion } from "./install.js";
 import { runUpdate } from "./update.js";
+import { createRenderer } from "./render.js";
 import type { CliOptions } from "./args.js";
 import type { ForgeConfig } from "./config.js";
 
@@ -124,7 +125,12 @@ async function runOneShot(
     gate,
     systemPrompt: SYSTEM_PROMPT,
     toolContext: { cwd },
-    onTextDelta: (text) => process.stdout.write(text),
+    // Only assistant text on stdout in one-shot mode: the point of -p is that
+    // its output can be piped, and tool chatter would corrupt whatever is
+    // reading it.
+    onEvent: (event) => {
+      if (event.type === "text_delta") process.stdout.write(event.text);
+    },
   });
 
   process.stdout.write("\n");
@@ -165,28 +171,54 @@ async function runInteractive(
   // hanging forever the same way the loop's own rl.question() call would.
   const ask = options.autoApprove ? async () => true : createSharedAskFn(rl, closed);
   const gate = new PermissionGate(DEFAULT_PERMISSION_POLICIES, ask);
+  const render = createRenderer();
 
   try {
     while (true) {
-      const userText = await Promise.race([rl.question("> "), closed]);
+      const userText = await questionOrNull(rl, closed, "> ");
       if (userText === null) break;
       const trimmed = userText.trim();
       if (trimmed.length === 0) continue;
       if (trimmed === "/exit") break;
 
-      const result = await runTurn(userText, {
-        provider,
-        session,
-        tools: registryHandle.registry.getAll(),
-        gate,
-        systemPrompt: SYSTEM_PROMPT,
-        toolContext: { cwd },
-        onTextDelta: (text) => process.stdout.write(text),
-      });
+      // A fresh controller per turn: aborting one turn must not leave every
+      // later turn in this session pre-aborted.
+      const controller = new AbortController();
+      const onSigint = (): void => controller.abort();
+      // readline installs its own SIGINT handling for the prompt; adding this
+      // listener only for the duration of the turn keeps Ctrl-C at the prompt
+      // behaving as it did.
+      process.on("SIGINT", onSigint);
+
+      let result;
+      try {
+        result = await runTurn(userText, {
+          provider,
+          session,
+          tools: registryHandle.registry.getAll(),
+          gate,
+          systemPrompt: SYSTEM_PROMPT,
+          toolContext: { cwd },
+          onEvent: render,
+          signal: controller.signal,
+        });
+      } catch (err) {
+        // An aborted provider request rejects rather than returning, and an
+        // interrupt the user asked for is not an error worth a stack trace.
+        if (controller.signal.aborted) {
+          process.stdout.write("\n(interrupted)\n");
+          continue;
+        }
+        throw err;
+      } finally {
+        process.off("SIGINT", onSigint);
+      }
 
       process.stdout.write("\n");
       if (result.stoppedReason === "max_steps_reached") {
         console.log("(stopped: max steps reached)");
+      } else if (result.stoppedReason === "aborted") {
+        console.log("(interrupted)");
       }
     }
   } finally {
