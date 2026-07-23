@@ -2,7 +2,7 @@ import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { loadConfig, requireApiKey } from "../../src/cli/config.js";
+import { loadConfig, requireEnv } from "../../src/cli/config.js";
 
 let dir: string;
 
@@ -15,9 +15,9 @@ afterEach(async () => {
 });
 
 describe("loadConfig", () => {
-  it("returns an empty mcpServers list when no config file exists", async () => {
+  it("returns an empty mcpServers list and the default anthropic provider when no config file exists", async () => {
     const config = await loadConfig(dir);
-    expect(config).toEqual({ mcpServers: [] });
+    expect(config).toEqual({ mcpServers: [], provider: { type: "anthropic" } });
   });
 
   it("reads mcpServers from forge.config.json when present", async () => {
@@ -34,6 +34,7 @@ describe("loadConfig", () => {
     expect(config.mcpServers).toEqual([
       { name: "fs", command: "npx", args: ["-y", "@modelcontextprotocol/server-filesystem", "."] },
     ]);
+    expect(config.provider).toEqual({ type: "anthropic" });
   });
 
   it("defaults mcpServers to an empty array if the config file omits it", async () => {
@@ -43,27 +44,47 @@ describe("loadConfig", () => {
 
     expect(config.mcpServers).toEqual([]);
   });
+
+  it("reads a configured provider from forge.config.json", async () => {
+    await writeFile(
+      join(dir, "forge.config.json"),
+      JSON.stringify({ provider: { type: "openrouter", model: "anthropic/claude-3.5-sonnet" } }),
+      "utf8",
+    );
+
+    const config = await loadConfig(dir);
+
+    expect(config.provider).toEqual({ type: "openrouter", model: "anthropic/claude-3.5-sonnet" });
+  });
+
+  it("defaults provider to anthropic if the config file omits it", async () => {
+    await writeFile(join(dir, "forge.config.json"), JSON.stringify({ mcpServers: [] }), "utf8");
+
+    const config = await loadConfig(dir);
+
+    expect(config.provider).toEqual({ type: "anthropic" });
+  });
 });
 
-describe("requireApiKey", () => {
-  it("returns the API key when ANTHROPIC_API_KEY is set", () => {
-    const original = process.env.ANTHROPIC_API_KEY;
-    process.env.ANTHROPIC_API_KEY = "test-key";
+describe("requireEnv", () => {
+  it("returns the value when the given env var is set", () => {
+    const original = process.env.FORGE_TEST_VAR;
+    process.env.FORGE_TEST_VAR = "test-value";
     try {
-      expect(requireApiKey()).toBe("test-key");
+      expect(requireEnv("FORGE_TEST_VAR")).toBe("test-value");
     } finally {
-      if (original === undefined) delete process.env.ANTHROPIC_API_KEY;
-      else process.env.ANTHROPIC_API_KEY = original;
+      if (original === undefined) delete process.env.FORGE_TEST_VAR;
+      else process.env.FORGE_TEST_VAR = original;
     }
   });
 
-  it("throws a clear error when ANTHROPIC_API_KEY is not set", () => {
-    const original = process.env.ANTHROPIC_API_KEY;
-    delete process.env.ANTHROPIC_API_KEY;
+  it("throws a clear error naming the env var when it is not set", () => {
+    const original = process.env.FORGE_TEST_VAR;
+    delete process.env.FORGE_TEST_VAR;
     try {
-      expect(() => requireApiKey()).toThrow(/ANTHROPIC_API_KEY/);
+      expect(() => requireEnv("FORGE_TEST_VAR")).toThrow(/FORGE_TEST_VAR/);
     } finally {
-      if (original !== undefined) process.env.ANTHROPIC_API_KEY = original;
+      if (original !== undefined) process.env.FORGE_TEST_VAR = original;
     }
   });
 });
