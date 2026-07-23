@@ -1,5 +1,13 @@
 import { existsSync } from "node:fs";
-import { delimiter, dirname, join } from "node:path";
+import { win32 } from "node:path";
+
+// Git for Windows only exists on Windows, so the paths parsed below are always
+// win32-shaped. node:path's ambient helpers would parse them with POSIX rules
+// on a macOS or Linux host -- e.g. when resolveShell is called with an explicit
+// platform: "win32", as the tests do -- splitting PATH on ":" instead of ";"
+// and treating "\" as an ordinary character, so dirname collapses to ".". The
+// win32.* helpers keep the parsing correct regardless of the host OS.
+const { delimiter, dirname, join } = win32;
 
 // Windows ships no POSIX shell, so node:child_process' exec() falls back to
 // cmd.exe there. That would force the model to write a second command dialect
@@ -29,9 +37,14 @@ function gitBashCandidates(env: NodeJS.ProcessEnv): string[] {
   for (const entry of (env.PATH ?? env.Path ?? "").split(delimiter)) {
     const trimmed = entry.trim();
     if (trimmed && GIT_PATH_ENTRY.test(trimmed)) {
-      const root = trimmed.toLowerCase().replace(/[\\/]$/, "").endsWith("bin")
-        ? dirname(dirname(trimmed))
-        : dirname(trimmed);
+      // The matched entry ends in \cmd, \bin, or \mingw64\bin. Only the last
+      // sits two levels below the install root; \cmd and \bin sit one level
+      // below it, so stripping a fixed two segments would drop the Git
+      // directory itself for those and resolve bash against the wrong root.
+      const normalized = trimmed.replace(/[\\/]$/, "");
+      const root = /[\\/]mingw64[\\/]bin$/i.test(normalized)
+        ? dirname(dirname(normalized))
+        : dirname(normalized);
       candidates.push(join(root, "bin", "bash.exe"));
     }
   }
