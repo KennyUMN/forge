@@ -57,7 +57,12 @@ function toOpenAiMessages(messages: Message[], systemPrompt: string): ChatComple
     } else {
       for (const content of message.content) {
         if (content.type === "tool_result") {
-          result.push({ role: "tool", tool_call_id: content.toolCallId, content: content.output });
+          // OpenAI's tool message has no field equivalent to Anthropic's
+          // native `is_error` on a tool_result content block, so fold the
+          // error signal into the content string itself rather than
+          // silently dropping it.
+          const output = content.isError ? `Error: ${content.output}` : content.output;
+          result.push({ role: "tool", tool_call_id: content.toolCallId, content: output });
         }
       }
     }

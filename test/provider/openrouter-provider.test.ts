@@ -84,7 +84,7 @@ describe("OpenRouterProvider", () => {
     expect(updated.name).toBe("openrouter");
   });
 
-  it("explodes a coalesced tool-result message into one OpenAI tool message per result, and injects the system prompt as the first message", async () => {
+  it("explodes a coalesced tool-result message into one OpenAI tool message per result, prefixing errored results with 'Error: ' and injects the system prompt as the first message", async () => {
     let receivedMessages: unknown;
     const client = {
       chat: {
@@ -118,7 +118,7 @@ describe("OpenRouterProvider", () => {
           role: "tool" as const,
           content: [
             { type: "tool_result" as const, toolCallId: "c1", output: "a.ts", isError: false },
-            { type: "tool_result" as const, toolCallId: "c2", output: "/repo", isError: false },
+            { type: "tool_result" as const, toolCallId: "c2", output: "no such file", isError: true },
           ],
         },
       ],
@@ -140,7 +140,7 @@ describe("OpenRouterProvider", () => {
         ],
       },
       { role: "tool", tool_call_id: "c1", content: "a.ts" },
-      { role: "tool", tool_call_id: "c2", content: "/repo" },
+      { role: "tool", tool_call_id: "c2", content: "Error: no such file" },
     ]);
   });
 });
