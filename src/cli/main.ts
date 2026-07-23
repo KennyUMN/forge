@@ -1,23 +1,81 @@
 import { createInterface } from "node:readline/promises";
 import { once } from "node:events";
-import { join } from "node:path";
+import { isAbsolute, join, resolve } from "node:path";
 import { PermissionGate } from "../permission/permission-gate.js";
 import { DEFAULT_PERMISSION_POLICIES } from "../permission/permission-policies.js";
 import { runTurn } from "../agent/turn-orchestrator.js";
 import { buildToolRegistry } from "./build-registry.js";
 import { buildProvider } from "./build-provider.js";
-import { loadConfig } from "./config.js";
+import { globalConfigPath, loadConfig } from "./config.js";
 import { createSharedAskFn } from "./ask-terminal.js";
-import { parseArgs, resolveSession } from "./resolve-session.js";
+import { resolveSession } from "./resolve-session.js";
+import { CliUsageError, HELP_TEXT, parseCliArgs } from "./args.js";
+import { loadEnvFiles } from "./env.js";
+import { installRoot, readVersion } from "./install.js";
+import { runUpdate } from "./update.js";
+import type { CliOptions } from "./args.js";
+import type { ForgeConfig } from "./config.js";
+
+const SYSTEM_PROMPT = "You are Forge, an agentic coding assistant.";
+
+async function printResolvedConfig(cwd: string, config: ForgeConfig, envFiles: string[]): Promise<void> {
+  console.log(`forge ${await readVersion()}`);
+  console.log(`  install root:  ${installRoot()}`);
+  console.log(`  working dir:   ${cwd}`);
+  console.log(`  global config: ${globalConfigPath()}`);
+  console.log(`  env files:     ${envFiles.length > 0 ? envFiles.join(", ") : "(none loaded)"}`);
+  console.log(`  provider:      ${config.provider.type}`);
+  console.log(`  model:         ${config.provider.model ?? "(provider default)"}`);
+  if (config.provider.baseUrl) console.log(`  base url:      ${config.provider.baseUrl}`);
+  if (config.provider.apiKeyEnv) {
+    // Report only whether the variable is populated. Printing the key itself
+    // would put it into terminal scrollback and shell history transcripts.
+    const present = Boolean(process.env[config.provider.apiKeyEnv]);
+    console.log(`  api key env:   ${config.provider.apiKeyEnv} (${present ? "set" : "NOT SET"})`);
+  }
+  console.log(`  mcp servers:   ${config.mcpServers.length}`);
+}
 
 export async function main(argv: string[]): Promise<void> {
-  const cwd = process.cwd();
-  const args = parseArgs(argv);
-  const config = await loadConfig(cwd);
+  let options: CliOptions;
+  try {
+    options = parseCliArgs(argv);
+  } catch (err) {
+    if (err instanceof CliUsageError) {
+      console.error(err.message);
+      process.exitCode = 1;
+      return;
+    }
+    throw err;
+  }
+
+  if (options.command === "help") {
+    console.log(HELP_TEXT);
+    return;
+  }
+  if (options.command === "version") {
+    console.log(await readVersion());
+    return;
+  }
+  if (options.command === "update") {
+    await runUpdate();
+    return;
+  }
+
+  // --cwd is resolved against the directory forge was invoked from, so a
+  // relative value means what the user typing it expects.
+  const cwd = options.cwd ? (isAbsolute(options.cwd) ? options.cwd : resolve(process.cwd(), options.cwd)) : process.cwd();
+
+  const envFiles = loadEnvFiles(cwd);
+  const config = await loadConfig(cwd, options);
+
+  if (options.command === "config") {
+    await printResolvedConfig(cwd, config, envFiles);
+    return;
+  }
 
   const sessionsDir = join(cwd, ".forge", "sessions");
-  const session = await resolveSession(sessionsDir, args);
-  console.log(`Session: ${session.sessionId}`);
+  const session = await resolveSession(sessionsDir, options);
 
   // buildProvider() must run before buildToolRegistry(): it throws (via
   // requireEnv) if the configured provider's API key env var is missing, and
@@ -29,6 +87,60 @@ export async function main(argv: string[]): Promise<void> {
   const provider = buildProvider(config.provider);
   const registryHandle = await buildToolRegistry(config.mcpServers);
 
+  try {
+    if (options.prompt !== undefined) {
+      await runOneShot(options, session, provider, registryHandle, cwd);
+      return;
+    }
+    console.log(`Session: ${session.sessionId}`);
+    await runInteractive(options, session, provider, registryHandle, cwd);
+  } finally {
+    await registryHandle.close();
+  }
+}
+
+type RegistryHandle = Awaited<ReturnType<typeof buildToolRegistry>>;
+type Provider = ReturnType<typeof buildProvider>;
+type Session = Awaited<ReturnType<typeof resolveSession>>;
+
+// -p/--print has no terminal to prompt in -- it is meant for scripts and pipes,
+// where a permission question would hang forever on a closed stdin. Tool calls
+// that a policy would ask about are therefore denied unless --yes was passed,
+// and the denial travels back to the model as corrective feedback rather than
+// killing the run.
+async function runOneShot(
+  options: CliOptions,
+  session: Session,
+  provider: Provider,
+  registryHandle: RegistryHandle,
+  cwd: string,
+): Promise<void> {
+  const gate = new PermissionGate(DEFAULT_PERMISSION_POLICIES, async () => options.autoApprove === true);
+
+  const result = await runTurn(options.prompt as string, {
+    provider,
+    session,
+    tools: registryHandle.registry.getAll(),
+    gate,
+    systemPrompt: SYSTEM_PROMPT,
+    toolContext: { cwd },
+    onTextDelta: (text) => process.stdout.write(text),
+  });
+
+  process.stdout.write("\n");
+  if (result.stoppedReason === "max_steps_reached") {
+    console.error("(stopped: max steps reached)");
+    process.exitCode = 1;
+  }
+}
+
+async function runInteractive(
+  options: CliOptions,
+  session: Session,
+  provider: Provider,
+  registryHandle: RegistryHandle,
+  cwd: string,
+): Promise<void> {
   const rl = createInterface({ input: process.stdin, output: process.stdout });
 
   // rl.question() never settles if the underlying stdin stream ends while
@@ -51,7 +163,8 @@ export async function main(argv: string[]): Promise<void> {
   // disables raw mode for the other. Racing against `closed` here too means
   // a permission prompt pending at stdin EOF resolves to "denied" instead of
   // hanging forever the same way the loop's own rl.question() call would.
-  const gate = new PermissionGate(DEFAULT_PERMISSION_POLICIES, createSharedAskFn(rl, closed));
+  const ask = options.autoApprove ? async () => true : createSharedAskFn(rl, closed);
+  const gate = new PermissionGate(DEFAULT_PERMISSION_POLICIES, ask);
 
   try {
     while (true) {
@@ -66,7 +179,7 @@ export async function main(argv: string[]): Promise<void> {
         session,
         tools: registryHandle.registry.getAll(),
         gate,
-        systemPrompt: "You are Forge, an agentic coding assistant.",
+        systemPrompt: SYSTEM_PROMPT,
         toolContext: { cwd },
         onTextDelta: (text) => process.stdout.write(text),
       });
@@ -78,6 +191,5 @@ export async function main(argv: string[]): Promise<void> {
     }
   } finally {
     rl.close();
-    await registryHandle.close();
   }
 }

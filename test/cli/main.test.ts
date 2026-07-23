@@ -10,8 +10,10 @@ import { main } from "../../src/cli/main.js";
 const fixtureServerPath = fileURLToPath(new URL("../fixtures/mcp-fixture-server.js", import.meta.url));
 
 let dir: string;
+let forgeHomeDir: string;
 let originalCwd: string;
 let originalApiKey: string | undefined;
+let originalForgeHome: string | undefined;
 let originalStdinDescriptor: PropertyDescriptor | undefined;
 
 beforeEach(async () => {
@@ -20,6 +22,12 @@ beforeEach(async () => {
   process.chdir(dir);
   originalApiKey = process.env.ANTHROPIC_API_KEY;
   process.env.ANTHROPIC_API_KEY = "sk-test-placeholder";
+  // Point FORGE_HOME at an empty directory: main() loads the user-level config
+  // and .env, and picking up the developer's real ones would make these tests
+  // pass or fail based on how their own forge is configured.
+  forgeHomeDir = await mkdtemp(join(tmpdir(), "forge-main-home-"));
+  originalForgeHome = process.env.FORGE_HOME;
+  process.env.FORGE_HOME = forgeHomeDir;
   originalStdinDescriptor = Object.getOwnPropertyDescriptor(process, "stdin");
 });
 
@@ -30,10 +38,13 @@ afterEach(async () => {
   } else {
     process.env.ANTHROPIC_API_KEY = originalApiKey;
   }
+  if (originalForgeHome === undefined) delete process.env.FORGE_HOME;
+  else process.env.FORGE_HOME = originalForgeHome;
   if (originalStdinDescriptor) {
     Object.defineProperty(process, "stdin", originalStdinDescriptor);
   }
   await rm(dir, { recursive: true, force: true });
+  await rm(forgeHomeDir, { recursive: true, force: true });
 });
 
 describe("main", () => {
