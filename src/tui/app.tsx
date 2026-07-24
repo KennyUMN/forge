@@ -19,6 +19,8 @@ import {
 } from "./transcript-model.js";
 import { nextPermissionMode } from "../permission/permission-policies.js";
 import type { PermissionMode } from "../permission/permission-policies.js";
+import { isSlashInput, runSlashCommand } from "./session-commands.js";
+import type { SlashContext, SlashEffect } from "./session-commands.js";
 import type { TranscriptState } from "./transcript-model.js";
 import type { TurnEvent } from "../agent/turn-events.js";
 import type { ToolCallRequest } from "../types/tool-call.js";
@@ -31,6 +33,7 @@ const SHORTCUTS = [
   "shift+tab  cycle permission mode (ask / accept-edits / auto)",
   "ctrl-c     interrupt the running turn, or quit when idle",
   "?          toggle this help (when the prompt is empty)",
+  "/help      list in-session commands (/model, /usage, /compact, ...)",
   "/exit      quit",
 ];
 
@@ -53,6 +56,13 @@ export interface AppProps {
   contextWindow: number;
   initialMode?: PermissionMode;
   runTurn: TurnRunner;
+  // In-session slash-command capabilities. Each is optional: when absent, the
+  // matching command degrades to an honest "not available" line rather than a
+  // silent no-op (the App reports the capability to the pure command handler).
+  models?: readonly string[];
+  onModelChange?: (model: string) => Promise<string>;
+  onCompact?: () => Promise<string>;
+  onAgent?: (task: string, signal: AbortSignal) => Promise<string>;
 }
 
 interface PendingPermission {
@@ -63,17 +73,24 @@ interface PendingPermission {
 export function App({
   version,
   provider,
-  model,
+  model: initialModel,
   cwd,
   branch,
   contextWindow,
   initialMode = "ask",
   runTurn,
+  models = [],
+  onModelChange,
+  onCompact,
+  onAgent,
 }: AppProps): ReactElement {
   const { exit } = useApp();
   const [transcript, setTranscript] = useState<TranscriptState>(EMPTY_TRANSCRIPT);
   const [input, setInput] = useState("");
   const [busy, setBusy] = useState(false);
+  // The active model is state, not just the prop: /model switches it live and
+  // the banner/status bar must follow.
+  const [model, setModel] = useState(initialModel);
   const [pending, setPending] = useState<PendingPermission | null>(null);
   const [frame, setFrame] = useState(0);
   const [mode, setMode] = useState<PermissionMode>(initialMode);
@@ -164,6 +181,101 @@ export function App({
     [runTurn, ask],
   );
 
+  const appendNotices = useCallback((lines: string[]) => {
+    if (lines.length === 0) return;
+    setTranscript((state) => lines.reduce((acc, line) => appendNotice(acc, line), state));
+  }, []);
+
+  // Runs a /agent task as its own interruptible, busy turn, mirroring submit()'s
+  // lifecycle so Ctrl-C and the spinner behave the same as for a normal turn.
+  const runAgentTask = useCallback(
+    async (task: string) => {
+      if (!onAgent) return;
+      setBusy(true);
+      const controller = new AbortController();
+      abortRef.current = controller;
+      try {
+        const summary = await onAgent(task, controller.signal);
+        setTranscript((state) => appendNotice(state, summary));
+      } catch (err) {
+        const message = controller.signal.aborted ? "interrupted" : `agent error: ${errorText(err)}`;
+        setTranscript((state) => appendNotice(state, message));
+      } finally {
+        setTranscript((state) => {
+          setSettledCount(state.items.length);
+          return state;
+        });
+        abortRef.current = null;
+        setBusy(false);
+      }
+    },
+    [onAgent],
+  );
+
+  const applyEffect = useCallback(
+    async (effect: SlashEffect) => {
+      switch (effect.kind) {
+        case "none":
+          return;
+        case "exit":
+          exit();
+          return;
+        case "clear":
+          setTranscript(EMPTY_TRANSCRIPT);
+          setSettledCount(0);
+          return;
+        case "set_mode":
+          setMode(effect.mode);
+          return;
+        case "switch_model":
+          if (!onModelChange) return;
+          try {
+            const msg = await onModelChange(effect.model);
+            setModel(effect.model);
+            setTranscript((state) => appendNotice(state, msg));
+          } catch (err) {
+            setTranscript((state) => appendNotice(state, `model switch failed: ${errorText(err)}`));
+          }
+          return;
+        case "compact":
+          if (!onCompact) return;
+          try {
+            const report = await onCompact();
+            setTranscript((state) => appendNotice(state, report));
+          } catch (err) {
+            setTranscript((state) => appendNotice(state, `compaction failed: ${errorText(err)}`));
+          }
+          return;
+        case "run_agent":
+          await runAgentTask(effect.task);
+          return;
+      }
+    },
+    [exit, onModelChange, onCompact, runAgentTask],
+  );
+
+  const handleSlash = useCallback(
+    async (text: string) => {
+      const slashCtx: SlashContext = {
+        provider,
+        model,
+        cwd,
+        branch,
+        mode: modeRef.current,
+        usedTokens,
+        contextWindow,
+        models,
+        canSwitchModel: Boolean(onModelChange),
+        canCompact: Boolean(onCompact),
+        canRunAgent: Boolean(onAgent),
+      };
+      const result = runSlashCommand(text, slashCtx);
+      appendNotices(result.lines);
+      await applyEffect(result.effect);
+    },
+    [provider, model, cwd, branch, usedTokens, contextWindow, models, onModelChange, onCompact, onAgent, appendNotices, applyEffect],
+  );
+
   useInput((char, key) => {
     // Ctrl-C interrupts the turn rather than quitting, matching every other
     // agent CLI; it only exits when there is nothing to interrupt.
@@ -198,11 +310,14 @@ export function App({
     if (key.return) {
       const text = input.trim();
       setInput("");
-      if (text === "/exit") {
-        exit();
+      if (!text) return;
+      // A leading slash is an in-session command handled locally, never sent to
+      // the model.
+      if (isSlashInput(text)) {
+        void handleSlash(text);
         return;
       }
-      if (text) void submit(text);
+      void submit(text);
       return;
     }
     if (key.delete || key.backspace) {

@@ -302,3 +302,90 @@ describe("App", () => {
     expect(lastFrame()).not.toContain("second");
   });
 });
+
+describe("App slash commands", () => {
+  const SLASH_PROPS = { ...BASE_PROPS, models: ["ComboOP", "gpt-4o"] };
+
+  // Effects that await a callback need an extra microtask flush beyond the
+  // single tick submit() does, before the resulting notice reaches the frame.
+  async function flush(): Promise<void> {
+    await tick();
+    await tick();
+  }
+
+  it("handles /help locally without sending it to the model", async () => {
+    const runTurn = vi.fn<TurnRunner>(async () => completed);
+    const { stdin, lastFrame } = render(<App {...SLASH_PROPS} runTurn={runTurn} />);
+
+    await submit(stdin, "/help");
+
+    expect(runTurn).not.toHaveBeenCalled();
+    expect(lastFrame()).toContain("commands:");
+    expect(lastFrame()).toContain("/usage");
+  });
+
+  it("/config shows the active provider and model", async () => {
+    const { stdin, lastFrame } = render(<App {...SLASH_PROPS} runTurn={async () => completed} />);
+
+    await submit(stdin, "/config");
+
+    expect(lastFrame()).toContain("provider: 9router");
+    expect(lastFrame()).toContain("model:    ComboOP");
+  });
+
+  it("/mode sets the permission mode", async () => {
+    const { stdin, lastFrame } = render(<App {...SLASH_PROPS} runTurn={async () => completed} />);
+
+    expect(lastFrame()).toContain("[ask]");
+    await submit(stdin, "/mode auto");
+
+    expect(lastFrame()).toContain("[auto]");
+  });
+
+  it("/model switches the active model via the callback and updates the status bar", async () => {
+    const onModelChange = vi.fn(async (m: string) => `model switched to ${m}`);
+    const { stdin, lastFrame } = render(
+      <App {...SLASH_PROPS} onModelChange={onModelChange} runTurn={async () => completed} />,
+    );
+
+    await submit(stdin, "/model gpt-4o");
+    await flush();
+
+    expect(onModelChange).toHaveBeenCalledWith("gpt-4o");
+    expect(lastFrame()).toContain("9router/gpt-4o");
+  });
+
+  it("/compact runs compaction via the callback", async () => {
+    const onCompact = vi.fn(async () => "context compacted: 120k -> 60k tokens");
+    const { stdin, lastFrame } = render(
+      <App {...SLASH_PROPS} onCompact={onCompact} runTurn={async () => completed} />,
+    );
+
+    await submit(stdin, "/compact");
+    await flush();
+
+    expect(onCompact).toHaveBeenCalled();
+    expect(lastFrame()).toContain("120k -> 60k");
+  });
+
+  it("/agent delegates the task to the subagent callback", async () => {
+    const onAgent = vi.fn(async (task: string) => `subagent done: ${task}`);
+    const { stdin, lastFrame } = render(
+      <App {...SLASH_PROPS} onAgent={onAgent} runTurn={async () => completed} />,
+    );
+
+    await submit(stdin, "/agent write a haiku");
+    await flush();
+
+    expect(onAgent.mock.calls[0][0]).toBe("write a haiku");
+    expect(lastFrame()).toContain("subagent done: write a haiku");
+  });
+
+  it("reports an unavailable capability instead of doing nothing", async () => {
+    const { stdin, lastFrame } = render(<App {...SLASH_PROPS} runTurn={async () => completed} />);
+
+    await submit(stdin, "/compact");
+
+    expect(lastFrame()).toContain("not available");
+  });
+});

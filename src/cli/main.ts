@@ -298,6 +298,10 @@ export async function main(argv: string[]): Promise<void> {
         permissionMode: options.permissionMode,
         oracle,
         lsp,
+        models: listModels().map((m) => m.id),
+        // /model rebuilds the base provider with the chosen model. A configured
+        // architect/editor composite collapses to that single model on switch.
+        buildProviderForModel: (model) => buildProvider({ ...config.provider, model }),
       });
       return;
     }
