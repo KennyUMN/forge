@@ -289,17 +289,41 @@ describe("App", () => {
     expect(lastFrame()).toContain("max steps reached");
   });
 
-  // Typing during a turn is almost always meant for the next prompt; buffering
-  // it would silently submit something the user has forgotten about.
-  it("ignores keystrokes while a turn is running", async () => {
+  // Typing mid-turn is queued, not dropped: the line is held and shown as
+  // queued instead of being sent to the model straight away.
+  it("queues a message typed while a turn is running", async () => {
     const runTurn = vi.fn<TurnRunner>(() => new Promise(() => {}));
     const { stdin, lastFrame } = renderApp(runTurn);
 
     await submit(stdin, "first");
+    expect(runTurn).toHaveBeenCalledOnce();
+
     await submit(stdin, "second");
 
     expect(runTurn).toHaveBeenCalledOnce();
-    expect(lastFrame()).not.toContain("second");
+    expect(lastFrame()).toContain("queued: second");
+  });
+
+  it("runs a queued message once the current turn finishes", async () => {
+    const calls: string[] = [];
+    let release: () => void = () => {};
+    const runTurn = vi.fn<TurnRunner>((input) => {
+      calls.push(input.text);
+      return new Promise<{ stoppedReason: string }>((resolve) => {
+        release = () => resolve(completed);
+      });
+    });
+    const { stdin } = renderApp(runTurn);
+
+    await submit(stdin, "first");
+    await submit(stdin, "second");
+    expect(calls).toEqual(["first"]);
+
+    release();
+    await tick();
+    await tick();
+
+    expect(calls).toEqual(["first", "second"]);
   });
 });
 

@@ -100,6 +100,9 @@ export function App({
   // Esc has dismissed the menu for the current input.
   const [selectedIndex, setSelectedIndex] = useState(0);
   const [menuDismissed, setMenuDismissed] = useState(false);
+  // Lines entered while a turn is running wait here and are sent one at a time
+  // once it finishes -- the message queue, like Claude Code's.
+  const [queue, setQueue] = useState<string[]>([]);
   // Undefined until a provider reports a count -- shown as unknown rather than
   // as zero, since several compatible servers never report usage at all.
   const [usedTokens, setUsedTokens] = useState<number | undefined>(undefined);
@@ -288,6 +291,26 @@ export function App({
     [provider, model, cwd, branch, usedTokens, contextWindow, models, onModelChange, onCompact, onAgent, appendNotices, applyEffect],
   );
 
+  // A slash command runs locally; anything else is a turn. Both the prompt and
+  // the queue drain go through here so queued lines behave exactly as if typed.
+  const processInput = useCallback(
+    (text: string) => {
+      if (isSlashInput(text)) void handleSlash(text);
+      else void submit(text);
+    },
+    [handleSlash, submit],
+  );
+
+  // Drain one queued line whenever the loop goes idle. submit()/handleSlash set
+  // busy synchronously, so a message that starts a turn re-blocks the drain
+  // until it finishes; local slash commands fall straight through to the next.
+  useEffect(() => {
+    if (busy || pending || queue.length === 0) return;
+    const next = queue[0];
+    setQueue((q) => q.slice(1));
+    processInput(next);
+  }, [busy, pending, queue, processInput]);
+
   // Autocomplete is offered only while the prompt is a bare command token -- a
   // leading slash with no space yet. Once an argument is being typed (/model g)
   // the menu closes and Enter/Tab go back to their normal behaviour.
@@ -321,15 +344,9 @@ export function App({
       return;
     }
 
-    // Keystrokes during a turn are dropped rather than buffered: text typed
-    // while the model is mid-response almost always belongs to the next
-    // prompt, and queueing it would silently submit something the user has
-    // forgotten they typed.
-    if (busy) return;
-
     // The autocomplete menu owns the arrows, Tab, Esc and Enter while it is
     // open. Other keys (letters, backspace) fall through so the query keeps
-    // filtering the list.
+    // filtering the list. (Never open while busy, so this is skipped mid-turn.)
     if (menuOpen) {
       if (key.upArrow) {
         setSelectedIndex((i) => (i - 1 + suggestions.length) % suggestions.length);
@@ -360,26 +377,26 @@ export function App({
       const text = input.trim();
       setInput("");
       if (!text) return;
-      // A leading slash is an in-session command handled locally, never sent to
-      // the model.
-      if (isSlashInput(text)) {
-        void handleSlash(text);
+      // Mid-turn the line joins the queue instead of being dropped; it runs
+      // once the current turn (and anything ahead of it) finishes.
+      if (busy) {
+        setQueue((q) => [...q, text]);
         return;
       }
-      void submit(text);
+      processInput(text);
       return;
     }
     if (key.delete || key.backspace) {
       setInput((current) => current.slice(0, -1));
       return;
     }
-    // Only when the prompt is empty, so a "?" typed inside a question reaches
-    // the model instead of opening the help.
-    if (char === "?" && input === "") {
+    // Only when the prompt is empty and idle, so a "?" typed inside a question
+    // or while a turn runs reaches the input instead of opening the help.
+    if (char === "?" && input === "" && !busy) {
       setShowHelp((current) => !current);
       return;
     }
-    if (char && !key.ctrl && !key.meta && !key.escape) {
+    if (char && !key.ctrl && !key.meta && !key.escape && !key.tab && !key.return) {
       setInput((current) => current + char);
     }
   });
@@ -423,7 +440,19 @@ export function App({
             {PROMPT_CHEVRON}{" "}
           </Text>
           <Text>{input}</Text>
-          {!busy && <Text inverse> </Text>}
+          {/* Cursor shows whenever input is accepted -- including mid-turn, now
+              that typing is queued rather than dropped. */}
+          <Text inverse> </Text>
+        </Box>
+      )}
+      {queue.length > 0 && (
+        <Box flexDirection="column" marginLeft={2}>
+          {queue.map((text, index) => (
+            <Text key={index} dimColor>
+              {"↳ queued: "}
+              {text}
+            </Text>
+          ))}
         </Box>
       )}
       {menuOpen && <SlashSuggestions items={suggestions} selectedIndex={activeIndex} />}
