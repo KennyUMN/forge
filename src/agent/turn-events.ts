@@ -1,5 +1,7 @@
 import type { FinishReason, TokenUsage } from "../types/message.js";
 import type { ToolCallRequest, ToolResult } from "../types/tool-call.js";
+import type { BudgetState } from "./budget.js";
+import type { AgentRunState } from "./parallel-dispatch.js";
 
 // One stream of events describing a turn as it happens, rather than a callback
 // per interesting moment. A renderer consumes it as a stream and decides what
@@ -21,6 +23,13 @@ export type TurnEvent =
   | { type: "tool_result"; call: ToolCallRequest; result: ToolResult }
   // usage is absent when the provider did not report any; a renderer must show
   // that as unknown rather than as zero tokens used.
-  | { type: "step_end"; step: number; finishReason: FinishReason; usage?: TokenUsage };
+  | { type: "step_end"; step: number; finishReason: FinishReason; usage?: TokenUsage }
+  | { type: "budget_exceeded"; state: BudgetState; reason: string }
+  | { type: "context_compacted"; originalTokens: number; compactedTokens: number; entriesCompacted: number }
+  | { type: "verification_start"; command: string; attempt: number }
+  | { type: "verification_pass" }
+  | { type: "verification_fail"; output: string; attempt: number; maxRetries: number }
+  | { type: "subagent_start"; id: string; task: string; mode: string }
+  | { type: "subagent_end"; id: string; state: AgentRunState; summary?: string };
 
 export type TurnEventHandler = (event: TurnEvent) => void;

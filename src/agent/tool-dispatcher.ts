@@ -2,12 +2,20 @@ import type { Tool, ToolExecutionContext } from "../tool/tool.js";
 import type { PermissionGate } from "../permission/permission-gate.js";
 import type { ToolCallRequest, ToolResult } from "../types/tool-call.js";
 import type { TurnEventHandler } from "./turn-events.js";
-import { isDoomLoop } from "./doom-loop.js";
+import type { HookConfig } from "../hooks/hooks.js";
+import { checkDoomLoop } from "./doom-loop.js";
+import { taintToolOutput } from "../tool/taint.js";
+import { boundOutput } from "../tool/output-bounds.js";
+import { matchesHook, runHook } from "../hooks/hooks.js";
 
 export interface DispatchOutcome {
   results: ToolResult[];
   callHistory: ToolCallRequest[];
 }
+
+export type CheckpointFn = (toolName: string, entryId: string) => Promise<void>;
+
+const MUTATING_TOOLS: ReadonlySet<string> = new Set(["write_file", "edit_file", "bash"]);
 
 // Dispatches a batch of tool calls: for each one, checks the doom-loop guard,
 // evaluates permission, and executes the tool if approved. Returns one
@@ -24,6 +32,8 @@ export async function dispatchToolCalls(
   callHistory: readonly ToolCallRequest[],
   context: ToolExecutionContext,
   onEvent?: TurnEventHandler,
+  checkpoint?: CheckpointFn,
+  hooks?: HookConfig[],
 ): Promise<DispatchOutcome> {
   const results: ToolResult[] = [];
   let history = [...callHistory];
@@ -37,7 +47,8 @@ export async function dispatchToolCalls(
   };
 
   for (const call of calls) {
-    const forceAsk = isDoomLoop(history, call);
+    const verdict = checkDoomLoop(history, results, call);
+    const forceAsk = verdict.action === "block";
     history = [...history, call];
     onEvent?.({ type: "tool_call", call });
 
@@ -53,9 +64,44 @@ export async function dispatchToolCalls(
       continue;
     }
 
+    if (hooks && hooks.length > 0) {
+      const hookCtx = { toolName: call.name, input: call.input, cwd: context.cwd };
+      const preHooks = hooks.filter((h) => h.event === "pre_tool" && matchesHook(h, call.name, call.input));
+      let blocked = false;
+      for (const hook of preHooks) {
+        const result = await runHook(hook, hookCtx);
+        if (result.blocked) {
+          record(call, { toolCallId: call.id, output: `Blocked by hook: ${result.stderr || `exit code ${result.exitCode}`}`, isError: true });
+          blocked = true;
+          break;
+        }
+      }
+      if (blocked) continue;
+    }
+
+    if (checkpoint && MUTATING_TOOLS.has(call.name)) {
+      await checkpoint(call.name, call.id);
+    }
+
     try {
       const executed = await tool.execute(call.input, context);
-      record(call, { toolCallId: call.id, output: executed.output, isError: executed.isError });
+      let output = executed.output;
+      if (!executed.isError) {
+        output = taintToolOutput(output, call.name, call.input);
+        output = boundOutput(output);
+      }
+      if (verdict.action === "steer") {
+        output = `${output}\n\n[system note: ${verdict.message}]`;
+      }
+      record(call, { toolCallId: call.id, output, isError: executed.isError });
+
+      if (hooks && hooks.length > 0) {
+        const hookCtx = { toolName: call.name, input: call.input, cwd: context.cwd };
+        const postHooks = hooks.filter((h) => h.event === "post_tool" && matchesHook(h, call.name, call.input));
+        for (const hook of postHooks) {
+          runHook(hook, hookCtx).catch(() => {});
+        }
+      }
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
       record(call, { toolCallId: call.id, output: `Tool "${call.name}" threw: ${message}`, isError: true });

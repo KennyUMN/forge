@@ -65,6 +65,8 @@ describe("App", () => {
     await type(stdin, SHIFT_TAB);
     expect(lastFrame()).toContain("[auto]");
     await type(stdin, SHIFT_TAB);
+    expect(lastFrame()).toContain("[plan]");
+    await type(stdin, SHIFT_TAB);
     expect(lastFrame()).toContain("[ask]");
   });
 

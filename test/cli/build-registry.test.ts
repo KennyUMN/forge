@@ -15,12 +15,12 @@ afterEach(async () => {
 });
 
 describe("buildToolRegistry", () => {
-  it("registers all six built-in tools when no MCP servers are configured", async () => {
+  it("registers all built-in tools when no MCP servers are configured", async () => {
     const handle = await buildToolRegistry([]);
     cleanup = handle.close;
 
     const names = [...handle.registry.getAll().keys()].sort();
-    expect(names).toEqual(["bash", "edit_file", "glob", "grep", "read_file", "write_file"]);
+    expect(names).toEqual(["ask_question", "bash", "edit_file", "glob", "grep", "load_skill", "lsp_definition", "lsp_hover", "lsp_references", "lsp_symbols", "oracle", "read_file", "spawn_agent", "write_file"]);
   });
 
   it("also registers a configured MCP server's tools, namespaced by server name", async () => {

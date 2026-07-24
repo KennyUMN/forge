@@ -1,0 +1,9 @@
+{
+  "name": "refactor-variable",
+  "setup": [
+    "cat > config.ts << 'EOF'\nconst x = 42;\n\nfunction getX(): number {\n  return x;\n}\n\nfunction printX(): void {\n  console.log(`The value of x is: ${x}`);\n}\n\nexport { getX, printX };\nEOF"
+  ],
+  "prompt": "In config.ts, rename the variable `x` to `maxRetries` everywhere it appears (declaration, usages in getX, printX, and the template literal). Also rename getX to getMaxRetries and printX to printMaxRetries. Update the exports accordingly.",
+  "verify": "grep -q 'maxRetries' config.ts && ! grep -q '\\bx\\b' config.ts && grep -q 'getMaxRetries' config.ts",
+  "maxTokens": 30000
+}

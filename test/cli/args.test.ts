@@ -41,7 +41,7 @@ describe("parseCliArgs", () => {
       "https://9router.home/v1",
       "--api-key-env",
       "NINEROUTER_API_KEY",
-      "-c",
+      "--cwd",
       "/tmp/work",
       "-r",
       "abc-123",
@@ -67,6 +67,16 @@ describe("parseCliArgs", () => {
     expect(options.continueLatest).toBe(true);
     expect(options.autoApprove).toBe(true);
     expect(options.insecure).toBe(true);
+  });
+
+  it("parses --profile into the profile option", () => {
+    expect(parseCliArgs(["--profile", "deep"]).profile).toBe("deep");
+  });
+
+  it("accumulates repeated -c config overrides in order", () => {
+    const options = parseCliArgs(["-c", "provider.model=gpt-4o", "--config", "maxSteps=10"]);
+
+    expect(options.configOverrides).toEqual(["provider.model=gpt-4o", "maxSteps=10"]);
   });
 
   it("rejects an unknown provider type by name, listing the valid ones", () => {
@@ -99,6 +109,8 @@ describe("parseCliArgs", () => {
       "--base-url",
       "--api-key-env",
       "--cwd",
+      "--profile",
+      "--config",
       "--resume",
       "--continue",
       "--print",

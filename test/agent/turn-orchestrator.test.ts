@@ -120,7 +120,10 @@ describe("runTurn", () => {
       .map((e) => e.payload as ToolResult);
     expect(toolResults[0].isError).toBe(true);
     expect(toolResults[0].output).toContain("denied");
-    expect(toolResults[1]).toEqual({ toolCallId: "2", output: "file contents", isError: false });
+    expect(toolResults[1].toolCallId).toBe("2");
+    expect(toolResults[1].isError).toBe(false);
+    expect(toolResults[1].output).toContain("file contents");
+    expect(toolResults[1].output).toContain("<untrusted_content");
   });
 
   it("forces an ask on the 3rd consecutive identical tool call even when a policy would auto-allow it", async () => {

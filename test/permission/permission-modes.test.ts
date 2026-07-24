@@ -18,7 +18,7 @@ function decide(mode: PermissionMode, name: string): string {
 
 describe("nextPermissionMode", () => {
   it("cycles through every mode and returns to the start", () => {
-    let mode: PermissionMode = "ask";
+    let mode: PermissionMode = "plan";
     const seen: PermissionMode[] = [mode];
     for (let i = 0; i < PERMISSION_MODES.length - 1; i++) {
       mode = nextPermissionMode(mode);
@@ -26,18 +26,30 @@ describe("nextPermissionMode", () => {
     }
 
     expect(seen).toEqual([...PERMISSION_MODES]);
-    expect(nextPermissionMode(mode)).toBe("ask");
+    expect(nextPermissionMode(mode)).toBe("plan");
   });
 
-  // Cycling starts at the most supervised mode so shift+tab always loosens
-  // before it tightens, never the reverse.
-  it("orders modes from most to least supervised", () => {
-    expect(PERMISSION_MODES[0]).toBe("ask");
-    expect(PERMISSION_MODES[PERMISSION_MODES.length - 1]).toBe("auto");
+  it("orders modes from most to least supervised: plan → ask → accept-edits → auto", () => {
+    expect(PERMISSION_MODES[0]).toBe("plan");
+    expect(PERMISSION_MODES[1]).toBe("ask");
+    expect(PERMISSION_MODES[2]).toBe("accept-edits");
+    expect(PERMISSION_MODES[3]).toBe("auto");
   });
 });
 
 describe("policiesForMode", () => {
+  it("plan: allows read-only tools", () => {
+    expect(decide("plan", "read_file")).toBe("allow");
+    expect(decide("plan", "grep")).toBe("allow");
+    expect(decide("plan", "glob")).toBe("allow");
+  });
+
+  it("plan: denies write tools and bash", () => {
+    expect(decide("plan", "write_file")).toBe("deny");
+    expect(decide("plan", "edit_file")).toBe("deny");
+    expect(decide("plan", "bash")).toBe("deny");
+  });
+
   it("ask: allows reads, asks before writes and bash", () => {
     expect(decide("ask", "read_file")).toBe("allow");
     expect(decide("ask", "grep")).toBe("allow");
@@ -45,9 +57,6 @@ describe("policiesForMode", () => {
     expect(decide("ask", "bash")).toBe("ask");
   });
 
-  // A file edit is reversible -- on disk, visible to git, undoable. A shell
-  // command is not, so accept-edits stops short of it rather than treating
-  // "writes" and "commands" as one category.
   it("accept-edits: allows file edits but still asks before bash", () => {
     expect(decide("accept-edits", "write_file")).toBe("allow");
     expect(decide("accept-edits", "edit_file")).toBe("allow");
@@ -61,9 +70,7 @@ describe("policiesForMode", () => {
     expect(decide("auto", "some_mcp_tool")).toBe("allow");
   });
 
-  // An MCP server's tools match none of the built-in name sets, and the safe
-  // reading of "unknown" is to ask rather than to allow.
-  it("asks about an unrecognised tool in every supervised mode", () => {
+  it("asks about an unrecognised tool in supervised modes", () => {
     expect(decide("ask", "some_mcp_tool")).toBe("ask");
     expect(decide("accept-edits", "some_mcp_tool")).toBe("ask");
   });

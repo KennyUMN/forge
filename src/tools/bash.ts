@@ -18,6 +18,10 @@ async function execute(input: unknown, context: ToolExecutionContext): Promise<T
     return { output: `Invalid input: "command" must be a string.`, isError: true };
   }
 
+  if (context.executor) {
+    return executeViaExecutor(command, context);
+  }
+
   try {
     const { stdout, stderr } = await execAsync(command, {
       cwd: context.cwd,
@@ -43,6 +47,25 @@ async function execute(input: unknown, context: ToolExecutionContext): Promise<T
     }
     const combined = [execError.stdout, execError.stderr, execError.message].filter(Boolean).join("\n");
     return { output: combined, isError: true };
+  }
+}
+
+async function executeViaExecutor(command: string, context: ToolExecutionContext): Promise<ToolExecutionResult> {
+  try {
+    const result = await context.executor!.executeCommand(command, {
+      cwd: context.cwd,
+      signal: context.signal,
+      timeout: DEFAULT_TIMEOUT_MS,
+    });
+    const output = [result.stdout, result.stderr].filter((part) => part.length > 0).join("\n");
+    const display = output.length > 0 ? output : "(command produced no output)";
+    return { output: display, isError: result.exitCode !== 0 };
+  } catch (err) {
+    if (context.signal?.aborted) {
+      return { output: `Command interrupted: ${command}`, isError: true };
+    }
+    const message = err instanceof Error ? err.message : String(err);
+    return { output: message, isError: true };
   }
 }
 

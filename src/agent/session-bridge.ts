@@ -1,6 +1,8 @@
 import type { SessionEntry } from "../types/session.js";
 import type { Message, MessageContent } from "../types/message.js";
 import type { ToolCallRequest, ToolResult } from "../types/tool-call.js";
+import { compactEntries } from "./compaction.js";
+import type { CompactionConfig } from "./compaction.js";
 
 // Bridges the durable session log (a flat sequence of typed entries) into the
 // Message[] shape a ModelProvider expects. Consecutive entries that belong to
@@ -10,8 +12,9 @@ import type { ToolCallRequest, ToolResult } from "../types/tool-call.js";
 // the tool_result entries that follow. This mirrors how providers like
 // Anthropic expect tool_use/tool_result blocks grouped within one message per
 // role, not as separate messages per entry.
-export function sessionEntriesToMessages(entries: readonly SessionEntry[]): Message[] {
-  return entries.reduce<Message[]>((messages, entry) => {
+export function sessionEntriesToMessages(entries: readonly SessionEntry[], compaction?: CompactionConfig): Message[] {
+  const source = compaction ? compactEntries(entries, compaction).entries : entries;
+  return source.reduce<Message[]>((messages, entry) => {
     if (entry.type === "user_message") {
       const payload = entry.payload as { text: string };
       return [...messages, { role: "user" as const, content: [{ type: "text" as const, text: payload.text }] }];

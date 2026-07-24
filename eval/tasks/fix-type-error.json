@@ -1,0 +1,10 @@
+{
+  "name": "fix-type-error",
+  "setup": [
+    "cat > tsconfig.json << 'EOF'\n{\"compilerOptions\":{\"strict\":true,\"noEmit\":true,\"target\":\"ES2022\",\"module\":\"NodeNext\",\"moduleResolution\":\"NodeNext\"}}\nEOF",
+    "cat > main.ts << 'EOF'\ninterface User {\n  name: string;\n  age: number;\n}\n\nfunction greet(user: User): string {\n  return `Hello, ${user.name}! You are ${user.age} years old.`;\n}\n\nconst user: User = { name: \"Alice\", age: \"thirty\" };\nconsole.log(greet(user));\nEOF"
+  ],
+  "prompt": "The file main.ts has a type error: the age field is assigned a string instead of a number. Fix the type error so that `npx tsc --noEmit` passes.",
+  "verify": "npx tsc --noEmit",
+  "maxTokens": 30000
+}

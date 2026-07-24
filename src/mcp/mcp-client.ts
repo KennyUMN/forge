@@ -7,6 +7,7 @@ export interface McpServerConfig {
   name: string;
   command: string;
   args?: string[];
+  env?: Record<string, string>;
 }
 
 export interface McpConnection {
@@ -54,7 +55,7 @@ function toForgeTool(
 }
 
 export async function connectMcpServer(config: McpServerConfig): Promise<McpConnection> {
-  const transport = new StdioClientTransport({ command: config.command, args: config.args ?? [] });
+  const transport = new StdioClientTransport({ command: config.command, args: config.args ?? [], env: config.env });
   const client = new Client({ name: "forge", version: "0.1.0" }, { capabilities: {} });
   await client.connect(transport);
 

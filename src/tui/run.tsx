@@ -4,11 +4,14 @@ import { findGitBranch } from "./git.js";
 import { PermissionGate } from "../permission/permission-gate.js";
 import { policiesForMode } from "../permission/permission-policies.js";
 import { runTurn } from "../agent/turn-orchestrator.js";
+import { runSubagent } from "../agent/subagent.js";
+import type { SubagentContext } from "../agent/subagent.js";
 import type { TurnRunner } from "./app.js";
 import type { PermissionMode } from "../permission/permission-policies.js";
 import type { ModelProvider } from "../provider/model-provider.js";
 import type { SessionStore } from "../session/session-store.js";
-import type { Tool } from "../tool/tool.js";
+import type { Tool, OracleFn, SubagentFn } from "../tool/tool.js";
+import type { LspClient } from "../lsp/lsp-client.js";
 
 // Used when the configured provider does not say. Deliberately conservative:
 // an over-large denominator makes the bar read comfortable right up to the
@@ -25,6 +28,9 @@ export interface RunTuiOptions {
   version: string;
   contextWindow?: number;
   autoApprove?: boolean;
+  permissionMode?: PermissionMode;
+  oracle?: OracleFn;
+  lsp?: LspClient;
 }
 
 export async function runTui(options: RunTuiOptions): Promise<void> {
@@ -33,19 +39,31 @@ export async function runTui(options: RunTuiOptions): Promise<void> {
   // it enforces can have changed since the last turn.
   const runner: TurnRunner = async ({ text, mode, onEvent, signal, ask }) => {
     const gate = new PermissionGate(policiesForMode(mode), options.autoApprove ? async () => true : ask);
+    const subagent: SubagentFn = async (task, config) => {
+      const ctx: SubagentContext = {
+        parentProvider: options.provider,
+        parentTools: options.tools,
+        parentSession: options.session,
+        parentGate: gate,
+        systemPrompt: options.systemPrompt,
+        cwd: options.cwd,
+        signal,
+      };
+      return runSubagent(task, config, ctx);
+    };
     return runTurn(text, {
       provider: options.provider,
       session: options.session,
       tools: options.tools,
       gate,
       systemPrompt: options.systemPrompt,
-      toolContext: { cwd: options.cwd },
+      toolContext: { cwd: options.cwd, oracle: options.oracle, subagent, lsp: options.lsp },
       onEvent,
       signal,
     });
   };
 
-  const initialMode: PermissionMode = options.autoApprove ? "auto" : "ask";
+  const initialMode: PermissionMode = options.permissionMode ?? (options.autoApprove ? "auto" : "ask");
 
   const instance = render(
     <App

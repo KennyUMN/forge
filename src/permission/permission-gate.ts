@@ -19,6 +19,12 @@ export class PermissionGate {
   ) {}
 
   async evaluate(call: ToolCallRequest, options: EvaluateOptions = {}): Promise<PermissionResult> {
+    for (const policy of this.policies) {
+      if (policy.evaluate(call) === "block") {
+        return { decision: "deny", reason: `blocked: ${policy.name}` };
+      }
+    }
+
     if (!options.forceAsk) {
       for (const policy of this.policies) {
         const result = policy.evaluate(call);

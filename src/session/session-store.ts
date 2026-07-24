@@ -10,13 +10,19 @@ export class SessionStore {
 
   private constructor(
     readonly sessionId: string,
-    sessionsDir: string,
+    readonly sessionsDir: string,
   ) {
     this.filePath = join(sessionsDir, `${sessionId}.jsonl`);
   }
 
   static async create(sessionsDir: string): Promise<SessionStore> {
     return new SessionStore(randomUUID(), sessionsDir);
+  }
+
+  static async createChild(sessionsDir: string, parentHeadId: string): Promise<SessionStore> {
+    const store = new SessionStore(randomUUID(), sessionsDir);
+    store.headId = parentHeadId;
+    return store;
   }
 
   static async load(sessionsDir: string, sessionId: string): Promise<SessionStore> {

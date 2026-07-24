@@ -62,6 +62,14 @@ export function reduceTranscript(state: TranscriptState, event: TurnEvent): Tran
     case "step_start":
     case "step_end":
       return { ...state, thinking: "" };
+    case "budget_exceeded":
+    case "context_compacted":
+    case "verification_start":
+    case "verification_pass":
+    case "verification_fail":
+    case "subagent_start":
+    case "subagent_end":
+      return state;
   }
 }
 

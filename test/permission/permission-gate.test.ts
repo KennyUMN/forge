@@ -1,6 +1,7 @@
 import { describe, it, expect, vi } from "vitest";
 import { PermissionGate } from "../../src/permission/permission-gate.js";
 import type { PermissionPolicy } from "../../src/permission/permission-policies.js";
+import { allowEverythingPolicy, createBlockListPolicy } from "../../src/permission/permission-policies.js";
 
 const call = { id: "1", name: "bash", input: { command: "ls" } };
 
@@ -89,5 +90,67 @@ describe("PermissionGate", () => {
     expect(ask).toHaveBeenCalled();
     expect(result.decision).toBe("deny");
     expect(result.reason).toContain("doom-loop");
+  });
+});
+
+describe("PermissionGate block decision", () => {
+  it("block denies immediately without consulting the ask function", async () => {
+    const blockPolicy = createBlockListPolicy(["bash"]);
+    const ask = vi.fn().mockResolvedValue(true);
+    const gate = new PermissionGate([blockPolicy], ask);
+
+    const result = await gate.evaluate(call);
+
+    expect(result.decision).toBe("deny");
+    expect(result.reason).toContain("blocked");
+    expect(result.reason).toContain(blockPolicy.name);
+    expect(ask).not.toHaveBeenCalled();
+  });
+
+  it("block cannot be overridden by auto mode (allowEverythingPolicy)", async () => {
+    const blockPolicy = createBlockListPolicy(["bash"]);
+    const ask = vi.fn().mockResolvedValue(true);
+    const gate = new PermissionGate([blockPolicy, allowEverythingPolicy], ask);
+
+    const result = await gate.evaluate(call);
+
+    expect(result.decision).toBe("deny");
+    expect(result.reason).toContain("blocked");
+    expect(ask).not.toHaveBeenCalled();
+  });
+
+  it("block cannot be bypassed by forceAsk (doom-loop guard)", async () => {
+    const blockPolicy = createBlockListPolicy(["bash"]);
+    const ask = vi.fn().mockResolvedValue(true);
+    const gate = new PermissionGate([blockPolicy], ask);
+
+    const result = await gate.evaluate(call, { forceAsk: true });
+
+    expect(result.decision).toBe("deny");
+    expect(result.reason).toContain("blocked");
+    expect(ask).not.toHaveBeenCalled();
+  });
+
+  it("block takes precedence even when allow policy comes first in the chain", async () => {
+    const allowPolicy: PermissionPolicy = { name: "allow-all", evaluate: () => "allow" };
+    const blockPolicy = createBlockListPolicy(["bash"]);
+    const ask = vi.fn();
+    const gate = new PermissionGate([blockPolicy, allowPolicy], ask);
+
+    const result = await gate.evaluate(call);
+
+    expect(result.decision).toBe("deny");
+    expect(result.reason).toContain("blocked");
+  });
+
+  it("non-blocked tools still pass through to later policies", async () => {
+    const blockPolicy = createBlockListPolicy(["write_file"]);
+    const ask = vi.fn();
+    const gate = new PermissionGate([blockPolicy, allowEverythingPolicy], ask);
+
+    const result = await gate.evaluate(call);
+
+    expect(result.decision).toBe("allow");
+    expect(ask).not.toHaveBeenCalled();
   });
 });

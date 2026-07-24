@@ -86,7 +86,7 @@ describe("full agent loop with real built-in tools", () => {
       .map((e) => e.payload as { output: string; isError: boolean });
 
     expect(toolResults.every((r) => r.isError === false)).toBe(true);
-    expect(toolResults[1].output).toBe("hello forge"); // read_file result
+    expect(toolResults[1].output).toContain("hello forge"); // read_file result (tainted)
     expect(toolResults[2].output).toContain("notes.txt"); // bash `ls` result
   });
 });

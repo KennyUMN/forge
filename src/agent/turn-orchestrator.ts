@@ -5,9 +5,18 @@ import type { PermissionGate } from "../permission/permission-gate.js";
 import type { ToolCallRequest, ToolResult } from "../types/tool-call.js";
 import type { ToolSchema } from "../types/message.js";
 import { sessionEntriesToMessages } from "./session-bridge.js";
+import { compactEntries } from "./compaction.js";
+import type { CompactionConfig } from "./compaction.js";
 import { executeStep } from "./step-executor.js";
 import { dispatchToolCalls } from "./tool-dispatcher.js";
+import type { CheckpointFn } from "./tool-dispatcher.js";
+import { createBudgetTracker } from "./budget.js";
+import type { BudgetConfig } from "./budget.js";
 import type { TurnEventHandler } from "./turn-events.js";
+import { runVerification, formatVerificationFailure } from "./verification-gate.js";
+import type { VerificationConfig } from "./verification-gate.js";
+import { reasoningForStep, reasoningToEffort } from "./reasoning-sandwich.js";
+import type { ReasoningLevel, ReasoningSandwichConfig } from "./reasoning-sandwich.js";
 
 const DEFAULT_MAX_STEPS = 50;
 
@@ -19,6 +28,12 @@ export interface TurnOrchestratorOptions {
   systemPrompt: string;
   toolContext: ToolExecutionContext;
   maxSteps?: number;
+  budget?: BudgetConfig;
+  compaction?: CompactionConfig;
+  verification?: VerificationConfig;
+  reasoningSandwich?: ReasoningSandwichConfig;
+  reasoningLevel?: ReasoningLevel;
+  checkpoint?: CheckpointFn;
   onEvent?: TurnEventHandler;
   // Aborted when the user interrupts. Threaded into the provider stream and
   // the tool context so an interrupt reaches whatever is actually blocking,
@@ -27,7 +42,7 @@ export interface TurnOrchestratorOptions {
   signal?: AbortSignal;
 }
 
-export type TurnStoppedReason = "completed" | "max_steps_reached" | "aborted";
+export type TurnStoppedReason = "completed" | "max_steps_reached" | "aborted" | "budget_exceeded" | "verification_failed";
 
 export interface TurnResult {
   finalText: string;
@@ -60,9 +75,11 @@ function failTruncatedToolCalls(calls: readonly ToolCallRequest[]): ToolResult[]
 // with no further tool calls, or when maxSteps is exhausted as a safety bound
 // against a runaway tool-calling loop.
 export async function runTurn(userText: string, options: TurnOrchestratorOptions): Promise<TurnResult> {
-  const { provider, session, tools, gate, systemPrompt, toolContext, onEvent, signal } = options;
+  const { provider, session, tools, gate, systemPrompt, toolContext, onEvent, signal, budget, compaction, verification, checkpoint, reasoningSandwich, reasoningLevel } = options;
   const maxSteps = options.maxSteps ?? DEFAULT_MAX_STEPS;
   const toolSchemas = toolsToSchemas(tools);
+  const tracker = budget ? createBudgetTracker(budget) : undefined;
+  const maxRetries = verification?.maxRetries ?? 3;
 
   await session.append("user_message", { text: userText });
 
@@ -72,6 +89,7 @@ export async function runTurn(userText: string, options: TurnOrchestratorOptions
   const contextWithSignal = signal ? { ...toolContext, signal } : toolContext;
 
   let callHistory: ToolCallRequest[] = [];
+  let verificationAttempt = 0;
 
   for (let step = 1; step <= maxSteps; step++) {
     if (signal?.aborted) {
@@ -79,19 +97,82 @@ export async function runTurn(userText: string, options: TurnOrchestratorOptions
     }
     onEvent?.({ type: "step_start", step });
 
+    const rawEntries = session.getEntries();
+    let messages;
+    if (compaction) {
+      const compactResult = compactEntries(rawEntries, compaction);
+      if (compactResult.compacted) {
+        const entriesCompacted = compactResult.entries.filter(
+          (e, i) => e !== rawEntries[i],
+        ).length;
+        onEvent?.({
+          type: "context_compacted",
+          originalTokens: compactResult.originalTokenEstimate,
+          compactedTokens: compactResult.compactedTokenEstimate,
+          entriesCompacted,
+        });
+      }
+      messages = sessionEntriesToMessages(compactResult.entries);
+    } else {
+      messages = sessionEntriesToMessages(rawEntries);
+    }
+
+    let stepProvider = provider;
+    if (reasoningLevel && provider.withThinking) {
+      stepProvider = provider.withThinking(reasoningToEffort(reasoningLevel));
+    } else if (reasoningSandwich && provider.withThinking) {
+      const level = reasoningForStep(step, maxSteps, verificationAttempt > 0, reasoningSandwich);
+      stepProvider = provider.withThinking(reasoningToEffort(level));
+    }
+
     const stepResult = await executeStep(
-      provider,
-      { systemPrompt, messages: sessionEntriesToMessages(session.getEntries()), tools: toolSchemas, signal },
+      stepProvider,
+      { systemPrompt, messages, tools: toolSchemas, signal },
       { onEvent },
     );
     onEvent?.({ type: "step_end", step, finishReason: stepResult.finishReason, usage: stepResult.usage });
+
+    if (tracker && stepResult.usage) {
+      const state = tracker.record(stepResult.usage);
+      const verdict = tracker.check();
+      if (verdict.action === "halt") {
+        onEvent?.({ type: "budget_exceeded", state, reason: verdict.reason });
+        return { finalText: stepResult.text, stepsExecuted: step, stoppedReason: "budget_exceeded" };
+      }
+    }
 
     if (stepResult.text) {
       await session.append("assistant_message", { text: stepResult.text });
     }
 
     if (stepResult.toolCalls.length === 0) {
-      return { finalText: stepResult.text, stepsExecuted: step, stoppedReason: "completed" };
+      if (!verification || !verification.command) {
+        return { finalText: stepResult.text, stepsExecuted: step, stoppedReason: "completed" };
+      }
+
+      verificationAttempt++;
+      onEvent?.({ type: "verification_start", command: verification.command, attempt: verificationAttempt });
+
+      const verdict = await runVerification(verification, { cwd: toolContext.cwd, signal }, verificationAttempt);
+
+      if (verdict.action === "pass") {
+        onEvent?.({ type: "verification_pass" });
+        return { finalText: stepResult.text, stepsExecuted: step, stoppedReason: "completed" };
+      }
+
+      if (verdict.action === "skip") {
+        return { finalText: stepResult.text, stepsExecuted: step, stoppedReason: "completed" };
+      }
+
+      onEvent?.({ type: "verification_fail", output: verdict.output, attempt: verificationAttempt, maxRetries });
+
+      if (verificationAttempt >= maxRetries) {
+        return { finalText: stepResult.text, stepsExecuted: step, stoppedReason: "verification_failed" };
+      }
+
+      const feedback = formatVerificationFailure(verification, verdict, maxRetries);
+      await session.append("user_message", { text: feedback });
+      continue;
     }
 
     for (const call of stepResult.toolCalls) {
@@ -109,6 +190,7 @@ export async function runTurn(userText: string, options: TurnOrchestratorOptions
         callHistory,
         contextWithSignal,
         onEvent,
+        checkpoint,
       );
       results = outcome.results;
       callHistory = outcome.callHistory;

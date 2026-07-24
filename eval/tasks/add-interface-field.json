@@ -1,0 +1,10 @@
+{
+  "name": "add-interface-field",
+  "setup": [
+    "cat > tsconfig.json << 'EOF'\n{\"compilerOptions\":{\"strict\":true,\"noEmit\":true,\"target\":\"ES2022\",\"module\":\"NodeNext\",\"moduleResolution\":\"NodeNext\"}}\nEOF",
+    "cat > types.ts << 'EOF'\nexport interface Config {\n  host: string;\n  port: number;\n}\n\nexport function createConfig(host: string, port: number): Config {\n  return { host, port };\n}\nEOF"
+  ],
+  "prompt": "Add an optional `debug` field of type boolean to the Config interface in types.ts. Update createConfig to accept an optional third parameter `debug` and include it in the returned object.",
+  "verify": "npx tsc --noEmit && grep -q 'debug' types.ts",
+  "maxTokens": 30000
+}

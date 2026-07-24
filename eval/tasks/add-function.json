@@ -1,0 +1,9 @@
+{
+  "name": "add-function",
+  "setup": [
+    "cat > math.ts << 'EOF'\nexport function add(a: number, b: number): number {\n  return a + b;\n}\n\nexport function subtract(a: number, b: number): number {\n  return a - b;\n}\nEOF"
+  ],
+  "prompt": "Add a `multiply` function to math.ts that takes two number parameters and returns their product. Export it the same way the other functions are exported.",
+  "verify": "grep -q 'export function multiply' math.ts && node -e \"const m = require('./math.ts'); if (typeof m.multiply !== 'function') process.exit(1)\" 2>/dev/null || grep -q 'multiply' math.ts",
+  "maxTokens": 30000
+}

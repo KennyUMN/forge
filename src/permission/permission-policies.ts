@@ -1,16 +1,13 @@
 import type { ToolCallRequest } from "../types/tool-call.js";
 
-export type PermissionDecision = "allow" | "deny" | "ask";
+export type PermissionDecision = "allow" | "deny" | "ask" | "block";
 
 export interface PermissionPolicy {
   name: string;
   evaluate(call: ToolCallRequest): PermissionDecision | undefined;
 }
 
-// These names match the built-in tools Sprint 3 will register (design spec
-// section 4.6): read_file/grep/glob are read-only, write_file/edit_file/bash
-// can change state or run arbitrary commands.
-const READ_ONLY_TOOL_NAMES = new Set(["read_file", "grep", "glob"]);
+const READ_ONLY_TOOL_NAMES = new Set(["read_file", "grep", "glob", "ask_question"]);
 const APPROVAL_REQUIRED_TOOL_NAMES = new Set(["write_file", "edit_file", "bash"]);
 
 export const autoAllowReadOnlyPolicy: PermissionPolicy = {
@@ -29,9 +26,6 @@ export const askBeforeWriteOrBashPolicy: PermissionPolicy = {
 
 export const DEFAULT_PERMISSION_POLICIES: PermissionPolicy[] = [autoAllowReadOnlyPolicy, askBeforeWriteOrBashPolicy];
 
-// Editing a file is reversible -- the change is on disk, visible to git, and
-// undoable. Running a shell command is not, so accept-edits stops short of it
-// rather than treating "writes" and "commands" as one category.
 const EDIT_TOOL_NAMES = new Set(["write_file", "edit_file"]);
 
 export const autoAllowEditsPolicy: PermissionPolicy = {
@@ -48,9 +42,16 @@ export const allowEverythingPolicy: PermissionPolicy = {
   },
 };
 
-// The modes a user cycles through at the prompt. Ordered from most to least
-// supervised, which is the order shift+tab moves in.
-export const PERMISSION_MODES = ["ask", "accept-edits", "auto"] as const;
+const denyWritePolicy: PermissionPolicy = {
+  name: "deny-writes-in-plan-mode",
+  evaluate(call) {
+    return APPROVAL_REQUIRED_TOOL_NAMES.has(call.name) ? "deny" : undefined;
+  },
+};
+
+export const planModePolicies: PermissionPolicy[] = [autoAllowReadOnlyPolicy, denyWritePolicy];
+
+export const PERMISSION_MODES = ["plan", "ask", "accept-edits", "auto"] as const;
 
 export type PermissionMode = (typeof PERMISSION_MODES)[number];
 
@@ -60,6 +61,8 @@ export function nextPermissionMode(mode: PermissionMode): PermissionMode {
 
 export function policiesForMode(mode: PermissionMode): PermissionPolicy[] {
   switch (mode) {
+    case "plan":
+      return planModePolicies;
     case "auto":
       return [allowEverythingPolicy];
     case "accept-edits":
@@ -67,4 +70,34 @@ export function policiesForMode(mode: PermissionMode): PermissionPolicy[] {
     case "ask":
       return DEFAULT_PERMISSION_POLICIES;
   }
+}
+
+export function createBlockListPolicy(blockedTools: string[]): PermissionPolicy {
+  const blocked = new Set(blockedTools);
+  return {
+    name: "block-list",
+    evaluate(call) {
+      return blocked.has(call.name) ? "block" : undefined;
+    },
+  };
+}
+
+export function createDenyListPolicy(deniedTools: string[]): PermissionPolicy {
+  const denied = new Set(deniedTools);
+  return {
+    name: "deny-list",
+    evaluate(call) {
+      return denied.has(call.name) ? "deny" : undefined;
+    },
+  };
+}
+
+export function createAllowListPolicy(allowedTools: string[]): PermissionPolicy {
+  const allowed = new Set(allowedTools);
+  return {
+    name: "allow-list",
+    evaluate(call) {
+      return allowed.has(call.name) ? "allow" : undefined;
+    },
+  };
 }
