@@ -12,10 +12,13 @@ import { globTool } from "../tools/glob.js";
 import { askQuestionTool } from "../tools/ask-question.js";
 import { oracleTool } from "../tools/oracle.js";
 import { spawnAgentTool } from "../tools/spawn-agent.js";
+import { spawnAgentsTool } from "../tools/spawn-agents.js";
+import { bestOfNTool } from "../tools/best-of-n.js";
 import { loadSkillTool } from "../tools/load-skill.js";
 import { definitionTool, referencesTool, hoverTool, symbolsTool } from "../tools/lsp-tools.js";
+import { getTools as getRepoMapTools } from "../plugins/repo-map/index.js";
 
-const BUILTIN_TOOLS = [readFileTool, writeFileTool, editFileTool, bashTool, grepTool, globTool, askQuestionTool, oracleTool, spawnAgentTool, loadSkillTool, definitionTool, referencesTool, hoverTool, symbolsTool];
+const BUILTIN_TOOLS = [readFileTool, writeFileTool, editFileTool, bashTool, grepTool, globTool, askQuestionTool, oracleTool, spawnAgentTool, spawnAgentsTool, bestOfNTool, loadSkillTool, definitionTool, referencesTool, hoverTool, symbolsTool, ...getRepoMapTools()];
 
 export interface RegistryHandle {
   registry: ToolRegistry;

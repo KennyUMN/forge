@@ -80,6 +80,26 @@ describe("checkpoint", () => {
 
       const content = await readFile(join(dir, "app.ts"), "utf8");
       expect(content).toBe("version 1");
+      // A file created after the checkpoint must be gone: rewind restores the
+      // snapshot exactly, it is not a partial file-content revert.
+      await expect(readFile(join(dir, "extra.txt"), "utf8")).rejects.toThrow();
     }, 15_000);
   });
+
+  it("preserves the user's pre-existing staged index while checkpointing", async () => {
+    await gitInit(dir);
+    await writeFile(join(dir, "committed.txt"), "v1");
+    await execFileAsync("git", ["add", "-A"], { cwd: dir });
+    await execFileAsync("git", ["commit", "-m", "initial"], { cwd: dir });
+
+    // The user stages a change but has not committed it.
+    await writeFile(join(dir, "staged.txt"), "user staged this");
+    await execFileAsync("git", ["add", "staged.txt"], { cwd: dir });
+
+    await createCheckpoint(dir, "sess-1", "entry-1", "write_file");
+
+    // Checkpointing must not touch the real index: staged.txt stays staged.
+    const { stdout } = await execFileAsync("git", ["diff", "--cached", "--name-only"], { cwd: dir });
+    expect(stdout).toContain("staged.txt");
+  }, 15_000);
 });

@@ -17,6 +17,7 @@ import { runVerification, formatVerificationFailure } from "./verification-gate.
 import type { VerificationConfig } from "./verification-gate.js";
 import { reasoningForStep, reasoningToEffort } from "./reasoning-sandwich.js";
 import type { ReasoningLevel, ReasoningSandwichConfig } from "./reasoning-sandwich.js";
+import type { HookConfig } from "../hooks/hooks.js";
 
 const DEFAULT_MAX_STEPS = 50;
 
@@ -34,6 +35,7 @@ export interface TurnOrchestratorOptions {
   reasoningSandwich?: ReasoningSandwichConfig;
   reasoningLevel?: ReasoningLevel;
   checkpoint?: CheckpointFn;
+  hooks?: HookConfig[];
   onEvent?: TurnEventHandler;
   // Aborted when the user interrupts. Threaded into the provider stream and
   // the tool context so an interrupt reaches whatever is actually blocking,
@@ -75,7 +77,7 @@ function failTruncatedToolCalls(calls: readonly ToolCallRequest[]): ToolResult[]
 // with no further tool calls, or when maxSteps is exhausted as a safety bound
 // against a runaway tool-calling loop.
 export async function runTurn(userText: string, options: TurnOrchestratorOptions): Promise<TurnResult> {
-  const { provider, session, tools, gate, systemPrompt, toolContext, onEvent, signal, budget, compaction, verification, checkpoint, reasoningSandwich, reasoningLevel } = options;
+  const { provider, session, tools, gate, systemPrompt, toolContext, onEvent, signal, budget, compaction, verification, checkpoint, hooks, reasoningSandwich, reasoningLevel } = options;
   const maxSteps = options.maxSteps ?? DEFAULT_MAX_STEPS;
   const toolSchemas = toolsToSchemas(tools);
   const tracker = budget ? createBudgetTracker(budget) : undefined;
@@ -191,6 +193,7 @@ export async function runTurn(userText: string, options: TurnOrchestratorOptions
         contextWithSignal,
         onEvent,
         checkpoint,
+        hooks,
       );
       results = outcome.results;
       callHistory = outcome.callHistory;

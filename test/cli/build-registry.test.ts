@@ -20,7 +20,7 @@ describe("buildToolRegistry", () => {
     cleanup = handle.close;
 
     const names = [...handle.registry.getAll().keys()].sort();
-    expect(names).toEqual(["ask_question", "bash", "edit_file", "glob", "grep", "load_skill", "lsp_definition", "lsp_hover", "lsp_references", "lsp_symbols", "oracle", "read_file", "spawn_agent", "write_file"]);
+    expect(names).toEqual(["ask_question", "bash", "best_of_n", "edit_file", "glob", "grep", "load_skill", "lsp_definition", "lsp_hover", "lsp_references", "lsp_symbols", "oracle", "read_file", "repo_map", "spawn_agent", "spawn_agents", "write_file"]);
   });
 
   it("also registers a configured MCP server's tools, namespaced by server name", async () => {
