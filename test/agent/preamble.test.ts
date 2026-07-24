@@ -15,7 +15,9 @@ beforeEach(async () => {
 });
 
 afterEach(async () => {
-  await rm(dir, { recursive: true, force: true });
+  // maxRetries rides out Windows EBUSY: an aborted child (find/git) can still
+  // hold the cwd for a beat after the test resolves, locking the directory.
+  await rm(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
 });
 
 describe("buildEnvironmentPreamble", () => {

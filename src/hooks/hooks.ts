@@ -2,6 +2,7 @@ import { readFile } from "node:fs/promises";
 import { join } from "node:path";
 import { execFile } from "node:child_process";
 import { minimatch } from "minimatch";
+import { resolveShell } from "../tools/shell.js";
 
 export interface HookConfig {
   event: "pre_tool" | "post_tool";
@@ -88,7 +89,7 @@ export async function runHook(hook: HookConfig, context: HookContext): Promise<H
 
   return new Promise<HookResult>((resolve) => {
     execFile(
-      "/bin/sh",
+      resolveShell() ?? "/bin/sh",
       ["-c", command],
       { cwd: context.cwd, timeout: HOOK_TIMEOUT_MS, maxBuffer: 1024 * 1024 },
       (error, stdout, stderr) => {

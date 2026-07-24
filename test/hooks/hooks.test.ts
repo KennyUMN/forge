@@ -123,7 +123,7 @@ describe("matchesHook", () => {
 describe("runHook", () => {
   it("runs a pre_tool hook and captures output", async () => {
     const hook: HookConfig = { event: "pre_tool", matcher: "bash", command: "echo hook-output" };
-    const result = await runHook(hook, { toolName: "bash", input: {}, cwd: "/tmp" });
+    const result = await runHook(hook, { toolName: "bash", input: {}, cwd: tmpdir() });
     expect(result.exitCode).toBe(0);
     expect(result.stdout.trim()).toBe("hook-output");
     expect(result.blocked).toBeUndefined();
@@ -131,7 +131,7 @@ describe("runHook", () => {
 
   it("sets blocked=true when pre_tool hook exits non-zero", async () => {
     const hook: HookConfig = { event: "pre_tool", matcher: "bash", command: "echo denied >&2; exit 1" };
-    const result = await runHook(hook, { toolName: "bash", input: {}, cwd: "/tmp" });
+    const result = await runHook(hook, { toolName: "bash", input: {}, cwd: tmpdir() });
     expect(result.exitCode).toBe(1);
     expect(result.blocked).toBe(true);
     expect(result.stderr.trim()).toBe("denied");
@@ -139,21 +139,21 @@ describe("runHook", () => {
 
   it("does not set blocked for post_tool hooks even on non-zero exit", async () => {
     const hook: HookConfig = { event: "post_tool", matcher: "bash", command: "exit 1" };
-    const result = await runHook(hook, { toolName: "bash", input: {}, cwd: "/tmp" });
+    const result = await runHook(hook, { toolName: "bash", input: {}, cwd: tmpdir() });
     expect(result.exitCode).toBe(1);
     expect(result.blocked).toBeUndefined();
   });
 
   it("substitutes $FILE_PATH with a shell-escaped path", async () => {
     const hook: HookConfig = { event: "post_tool", command: "echo $FILE_PATH" };
-    const result = await runHook(hook, { toolName: "write_file", input: { path: "src/app.ts" }, cwd: "/tmp" });
+    const result = await runHook(hook, { toolName: "write_file", input: { path: "src/app.ts" }, cwd: tmpdir() });
     expect(result.stdout.trim()).toBe("src/app.ts");
     expect(result.exitCode).toBe(0);
   });
 
   it("safely escapes paths with shell metacharacters", async () => {
     const hook: HookConfig = { event: "post_tool", command: "echo $FILE_PATH" };
-    const result = await runHook(hook, { toolName: "write_file", input: { path: "file; rm -rf /.ts" }, cwd: "/tmp" });
+    const result = await runHook(hook, { toolName: "write_file", input: { path: "file; rm -rf /.ts" }, cwd: tmpdir() });
     expect(result.stdout.trim()).toBe("file; rm -rf /.ts");
     expect(result.exitCode).toBe(0);
   });

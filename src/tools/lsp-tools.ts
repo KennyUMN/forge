@@ -1,10 +1,21 @@
-import { fileURLToPath } from "node:url";
 import type { Tool, ToolExecutionContext, ToolExecutionResult } from "../tool/tool.js";
 import type { LspLocation } from "../lsp/lsp-client.js";
 
+// Convert a file:// URI to a plain path without node:url's fileURLToPath, which
+// resolves against the host OS: on Windows a driveless URI like
+// file:///project/index.ts throws (no drive letter) and paths come back with
+// backslashes. LSP servers speak forward-slash URIs on every platform, so we
+// keep forward slashes and only strip a Windows drive letter's leading slash.
+function uriToPath(uri: string): string {
+  if (!uri.startsWith("file://")) return uri;
+  let path = decodeURIComponent(uri.slice("file://".length));
+  // file:///C:/foo -> /C:/foo -> C:/foo ; file:///project/x -> /project/x (kept)
+  if (/^\/[A-Za-z]:/.test(path)) path = path.slice(1);
+  return path;
+}
+
 function formatLocation(loc: LspLocation): string {
-  const file = loc.uri.startsWith("file://") ? fileURLToPath(loc.uri) : loc.uri;
-  return `${file}:${loc.range.start.line + 1}:${loc.range.start.character + 1}`;
+  return `${uriToPath(loc.uri)}:${loc.range.start.line + 1}:${loc.range.start.character + 1}`;
 }
 
 function formatLocations(locations: LspLocation[]): string {

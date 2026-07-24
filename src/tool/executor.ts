@@ -1,5 +1,6 @@
 import { execFile } from "node:child_process";
 import { readFile, writeFile } from "node:fs/promises";
+import { resolveShell } from "../tools/shell.js";
 
 export interface CommandResult {
   stdout: string;
@@ -30,7 +31,7 @@ export class LocalExecutor implements Executor {
       }
 
       const child = execFile(
-        "/bin/sh",
+        resolveShell() ?? "/bin/sh",
         ["-c", command],
         { cwd, timeout, maxBuffer: MAX_BUFFER_BYTES },
         (error, stdout, stderr) => {
@@ -53,7 +54,15 @@ export class LocalExecutor implements Executor {
       );
 
       if (signal) {
-        const onAbort = () => child.kill("SIGTERM");
+        // Reject as soon as the signal fires rather than waiting for the exec
+        // callback: on Windows, kill() terminates the shell but a grandchild
+        // (e.g. Git Bash's `sleep`) keeps the stdout pipe open, so the callback
+        // would not fire until that grandchild exits on its own. Kill is
+        // best-effort cleanup; the promise settles immediately either way.
+        const onAbort = () => {
+          child.kill("SIGTERM");
+          reject(new Error("Aborted"));
+        };
         signal.addEventListener("abort", onAbort, { once: true });
         child.on("close", () => signal.removeEventListener("abort", onAbort));
       }

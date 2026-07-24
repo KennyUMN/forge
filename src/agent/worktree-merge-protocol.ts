@@ -1,6 +1,7 @@
 import { exec, spawn } from "node:child_process";
 import { promisify } from "node:util";
 import type { WorktreeHandle } from "./worktree.js";
+import { resolveShell } from "../tools/shell.js";
 
 const execAsync = promisify(exec);
 
@@ -77,7 +78,10 @@ export async function mergeWithVerification(
   }
 
   try {
-    await execAsync(verifyCommand, { cwd, maxBuffer: MAX_BUFFER });
+    // verifyCommand is an arbitrary shell command (e.g. "npm test"); route it
+    // through the resolved shell so Windows runs it under Git Bash rather than
+    // cmd.exe, keeping one command dialect on every platform.
+    await execAsync(verifyCommand, { cwd, maxBuffer: MAX_BUFFER, shell: resolveShell() });
   } catch (err) {
     const execErr = err as { stdout?: string; stderr?: string; message?: string };
     const output = [execErr.stdout, execErr.stderr].filter(Boolean).join("\n").trim()
