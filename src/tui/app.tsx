@@ -5,6 +5,7 @@ import {
   Banner,
   Divider,
   PermissionPrompt,
+  SlashSuggestions,
   StatusBar,
   ThinkingView,
   TranscriptRow,
@@ -19,7 +20,7 @@ import {
 } from "./transcript-model.js";
 import { nextPermissionMode } from "../permission/permission-policies.js";
 import type { PermissionMode } from "../permission/permission-policies.js";
-import { isSlashInput, runSlashCommand } from "./session-commands.js";
+import { isSlashInput, runSlashCommand, SESSION_COMMANDS } from "./session-commands.js";
 import type { SlashContext, SlashEffect } from "./session-commands.js";
 import type { TranscriptState } from "./transcript-model.js";
 import type { TurnEvent } from "../agent/turn-events.js";
@@ -95,6 +96,10 @@ export function App({
   const [frame, setFrame] = useState(0);
   const [mode, setMode] = useState<PermissionMode>(initialMode);
   const [showHelp, setShowHelp] = useState(false);
+  // Slash-command autocomplete: which suggestion is highlighted, and whether
+  // Esc has dismissed the menu for the current input.
+  const [selectedIndex, setSelectedIndex] = useState(0);
+  const [menuDismissed, setMenuDismissed] = useState(false);
   // Undefined until a provider reports a count -- shown as unknown rather than
   // as zero, since several compatible servers never report usage at all.
   const [usedTokens, setUsedTokens] = useState<number | undefined>(undefined);
@@ -121,6 +126,13 @@ export function App({
     const timer = setInterval(() => setFrame((current) => current + 1), SPINNER_INTERVAL_MS);
     return () => clearInterval(timer);
   }, [busy]);
+
+  // Editing the prompt re-opens the menu (undoing an earlier Esc) and moves the
+  // highlight back to the top, so the selection never points past a shrunk list.
+  useEffect(() => {
+    setSelectedIndex(0);
+    setMenuDismissed(false);
+  }, [input]);
 
   const ask = useCallback(
     (call: ToolCallRequest) =>
@@ -276,6 +288,14 @@ export function App({
     [provider, model, cwd, branch, usedTokens, contextWindow, models, onModelChange, onCompact, onAgent, appendNotices, applyEffect],
   );
 
+  // Autocomplete is offered only while the prompt is a bare command token -- a
+  // leading slash with no space yet. Once an argument is being typed (/model g)
+  // the menu closes and Enter/Tab go back to their normal behaviour.
+  const slashQuery = input.startsWith("/") && !input.includes(" ") ? input.slice(1).toLowerCase() : null;
+  const suggestions = slashQuery === null ? [] : SESSION_COMMANDS.filter((cmd) => cmd.name.startsWith(slashQuery));
+  const menuOpen = !busy && !pending && !menuDismissed && suggestions.length > 0;
+  const activeIndex = suggestions.length > 0 ? Math.min(selectedIndex, suggestions.length - 1) : 0;
+
   useInput((char, key) => {
     // Ctrl-C interrupts the turn rather than quitting, matching every other
     // agent CLI; it only exits when there is nothing to interrupt.
@@ -306,6 +326,35 @@ export function App({
     // prompt, and queueing it would silently submit something the user has
     // forgotten they typed.
     if (busy) return;
+
+    // The autocomplete menu owns the arrows, Tab, Esc and Enter while it is
+    // open. Other keys (letters, backspace) fall through so the query keeps
+    // filtering the list.
+    if (menuOpen) {
+      if (key.upArrow) {
+        setSelectedIndex((i) => (i - 1 + suggestions.length) % suggestions.length);
+        return;
+      }
+      if (key.downArrow) {
+        setSelectedIndex((i) => (i + 1) % suggestions.length);
+        return;
+      }
+      if (key.escape) {
+        setMenuDismissed(true);
+        return;
+      }
+      // Tab fills the prompt with the highlighted command (plus a space) so the
+      // user can type arguments; Enter runs it straight away.
+      if (key.tab && !key.shift) {
+        setInput(`/${suggestions[activeIndex].name} `);
+        return;
+      }
+      if (key.return) {
+        setInput("");
+        void handleSlash(`/${suggestions[activeIndex].name}`);
+        return;
+      }
+    }
 
     if (key.return) {
       const text = input.trim();
@@ -377,6 +426,7 @@ export function App({
           {!busy && <Text inverse> </Text>}
         </Box>
       )}
+      {menuOpen && <SlashSuggestions items={suggestions} selectedIndex={activeIndex} />}
       <Divider />
       <StatusBar
         mode={mode}

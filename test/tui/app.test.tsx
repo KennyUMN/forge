@@ -389,3 +389,87 @@ describe("App slash commands", () => {
     expect(lastFrame()).toContain("not available");
   });
 });
+
+describe("App slash autocomplete", () => {
+  const UP = "\x1b[A";
+  const DOWN = "\x1b[B";
+  const TAB = "\t";
+  const ESC = "\x1b";
+
+  it("shows the command menu while a slash command is being typed", async () => {
+    const { stdin, lastFrame } = renderApp(async () => completed);
+
+    await type(stdin, "/");
+
+    expect(lastFrame()).toContain("/model");
+    expect(lastFrame()).toContain("/usage");
+    expect(lastFrame()).toContain("navigate");
+  });
+
+  it("filters the menu by the typed prefix", async () => {
+    const { stdin, lastFrame } = renderApp(async () => completed);
+
+    await type(stdin, "/mo");
+
+    expect(lastFrame()).toContain("/model");
+    expect(lastFrame()).toContain("/mode");
+    expect(lastFrame()).not.toContain("/usage");
+  });
+
+  it("moves the highlight with the arrow keys", async () => {
+    const { stdin, lastFrame } = renderApp(async () => completed);
+
+    await type(stdin, "/mo");
+    expect(lastFrame()).toContain("› /model");
+
+    await type(stdin, DOWN);
+    expect(lastFrame()).toContain("› /mode");
+
+    await type(stdin, UP);
+    expect(lastFrame()).toContain("› /model");
+  });
+
+  it("completes the highlighted command on tab and closes the menu", async () => {
+    const { stdin, lastFrame } = renderApp(async () => completed);
+
+    await type(stdin, "/mo");
+    expect(lastFrame()).toContain("navigate");
+
+    await type(stdin, TAB);
+
+    // The prompt now holds the completed command (the trailing space it adds is
+    // trimmed in the rendered frame) and the menu -- its hint line -- is gone.
+    expect(lastFrame()).toContain("/model");
+    expect(lastFrame()).not.toContain("navigate");
+  });
+
+  it("runs the highlighted command on enter without touching the model", async () => {
+    const runTurn = vi.fn<TurnRunner>(async () => completed);
+    const { stdin, lastFrame } = renderApp(runTurn);
+
+    await type(stdin, "/he");
+    await type(stdin, ENTER);
+
+    expect(runTurn).not.toHaveBeenCalled();
+    expect(lastFrame()).toContain("commands:");
+  });
+
+  it("dismisses the menu on escape", async () => {
+    const { stdin, lastFrame } = renderApp(async () => completed);
+
+    await type(stdin, "/");
+    expect(lastFrame()).toContain("navigate");
+
+    stdin.write(ESC);
+    await new Promise((resolve) => setTimeout(resolve, 60));
+    expect(lastFrame()).not.toContain("navigate");
+  });
+
+  it("hides the menu once an argument is being typed", async () => {
+    const { stdin, lastFrame } = renderApp(async () => completed);
+
+    await type(stdin, "/model x");
+
+    expect(lastFrame()).not.toContain("navigate");
+  });
+});
