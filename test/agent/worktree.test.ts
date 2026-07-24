@@ -67,7 +67,7 @@ describe("worktree", () => {
       expect(handle).not.toBeNull();
 
       await writeFile(join(handle!.path, "new-file.txt"), "content\n", "utf8");
-      await execAsync("git add -A && git commit -m 'add file'", { cwd: handle!.path });
+      await execAsync('git add -A && git commit -m "add file"', { cwd: handle!.path });
 
       const result = await mergeWorktree(repoDir, handle!);
 
@@ -83,10 +83,10 @@ describe("worktree", () => {
       expect(handle).not.toBeNull();
 
       await writeFile(join(handle!.path, "README.md"), "worktree version\n", "utf8");
-      await execAsync("git add -A && git commit -m 'wt change'", { cwd: handle!.path });
+      await execAsync('git add -A && git commit -m "wt change"', { cwd: handle!.path });
 
       await writeFile(join(repoDir, "README.md"), "main version\n", "utf8");
-      await execAsync("git add -A && git commit -m 'main change'", { cwd: repoDir });
+      await execAsync('git add -A && git commit -m "main change"', { cwd: repoDir });
 
       const result = await mergeWorktree(repoDir, handle!);
 

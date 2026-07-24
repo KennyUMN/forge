@@ -3,6 +3,7 @@ import type { ReactElement } from "react";
 import { parseMarkdown } from "./markdown.js";
 import type { Span } from "./markdown.js";
 import type { TranscriptItem } from "./transcript-model.js";
+import type { SlashCommandSpec } from "./session-commands.js";
 import type { ToolCallRequest, ToolResult } from "../types/tool-call.js";
 
 const MAX_INPUT_CHARS = 70;
@@ -335,6 +336,34 @@ export function StatusBar({
           quit
         </Text>
       </Box>
+    </Box>
+  );
+}
+
+// The autocomplete menu shown while the prompt holds a partial slash command.
+// The highlighted row is marked with a chevron and colour so it reads on
+// terminals that drop background inversion.
+export function SlashSuggestions({
+  items,
+  selectedIndex,
+}: {
+  items: readonly SlashCommandSpec[];
+  selectedIndex: number;
+}): ReactElement | null {
+  if (items.length === 0) return null;
+  const width = Math.max(...items.map((item) => item.usage.length));
+  return (
+    <Box flexDirection="column" marginLeft={2}>
+      {items.map((item, index) => {
+        const selected = index === selectedIndex;
+        return (
+          <Text key={item.name} color={selected ? "cyan" : undefined} bold={selected} dimColor={!selected}>
+            {selected ? "› " : "  "}
+            {item.usage.padEnd(width)}  {item.description}
+          </Text>
+        );
+      })}
+      <Text dimColor>{"  ↑/↓ navigate · tab complete · enter run · esc cancel"}</Text>
     </Box>
   );
 }

@@ -289,16 +289,211 @@ describe("App", () => {
     expect(lastFrame()).toContain("max steps reached");
   });
 
-  // Typing during a turn is almost always meant for the next prompt; buffering
-  // it would silently submit something the user has forgotten about.
-  it("ignores keystrokes while a turn is running", async () => {
+  // Typing mid-turn is queued, not dropped: the line is held and shown as
+  // queued instead of being sent to the model straight away.
+  it("queues a message typed while a turn is running", async () => {
     const runTurn = vi.fn<TurnRunner>(() => new Promise(() => {}));
     const { stdin, lastFrame } = renderApp(runTurn);
 
     await submit(stdin, "first");
+    expect(runTurn).toHaveBeenCalledOnce();
+
     await submit(stdin, "second");
 
     expect(runTurn).toHaveBeenCalledOnce();
-    expect(lastFrame()).not.toContain("second");
+    expect(lastFrame()).toContain("queued: second");
+  });
+
+  it("runs a queued message once the current turn finishes", async () => {
+    const calls: string[] = [];
+    let release: () => void = () => {};
+    const runTurn = vi.fn<TurnRunner>((input) => {
+      calls.push(input.text);
+      return new Promise<{ stoppedReason: string }>((resolve) => {
+        release = () => resolve(completed);
+      });
+    });
+    const { stdin } = renderApp(runTurn);
+
+    await submit(stdin, "first");
+    await submit(stdin, "second");
+    expect(calls).toEqual(["first"]);
+
+    release();
+    await tick();
+    await tick();
+
+    expect(calls).toEqual(["first", "second"]);
+  });
+});
+
+describe("App slash commands", () => {
+  const SLASH_PROPS = { ...BASE_PROPS, models: ["ComboOP", "gpt-4o"] };
+
+  // Effects that await a callback need an extra microtask flush beyond the
+  // single tick submit() does, before the resulting notice reaches the frame.
+  async function flush(): Promise<void> {
+    await tick();
+    await tick();
+  }
+
+  it("handles /help locally without sending it to the model", async () => {
+    const runTurn = vi.fn<TurnRunner>(async () => completed);
+    const { stdin, lastFrame } = render(<App {...SLASH_PROPS} runTurn={runTurn} />);
+
+    await submit(stdin, "/help");
+
+    expect(runTurn).not.toHaveBeenCalled();
+    expect(lastFrame()).toContain("commands:");
+    expect(lastFrame()).toContain("/usage");
+  });
+
+  it("/config shows the active provider and model", async () => {
+    const { stdin, lastFrame } = render(<App {...SLASH_PROPS} runTurn={async () => completed} />);
+
+    await submit(stdin, "/config");
+
+    expect(lastFrame()).toContain("provider: 9router");
+    expect(lastFrame()).toContain("model:    ComboOP");
+  });
+
+  it("/mode sets the permission mode", async () => {
+    const { stdin, lastFrame } = render(<App {...SLASH_PROPS} runTurn={async () => completed} />);
+
+    expect(lastFrame()).toContain("[ask]");
+    await submit(stdin, "/mode auto");
+
+    expect(lastFrame()).toContain("[auto]");
+  });
+
+  it("/model switches the active model via the callback and updates the status bar", async () => {
+    const onModelChange = vi.fn(async (m: string) => `model switched to ${m}`);
+    const { stdin, lastFrame } = render(
+      <App {...SLASH_PROPS} onModelChange={onModelChange} runTurn={async () => completed} />,
+    );
+
+    await submit(stdin, "/model gpt-4o");
+    await flush();
+
+    expect(onModelChange).toHaveBeenCalledWith("gpt-4o");
+    expect(lastFrame()).toContain("9router/gpt-4o");
+  });
+
+  it("/compact runs compaction via the callback", async () => {
+    const onCompact = vi.fn(async () => "context compacted: 120k -> 60k tokens");
+    const { stdin, lastFrame } = render(
+      <App {...SLASH_PROPS} onCompact={onCompact} runTurn={async () => completed} />,
+    );
+
+    await submit(stdin, "/compact");
+    await flush();
+
+    expect(onCompact).toHaveBeenCalled();
+    expect(lastFrame()).toContain("120k -> 60k");
+  });
+
+  it("/agent delegates the task to the subagent callback", async () => {
+    const onAgent = vi.fn(async (task: string) => `subagent done: ${task}`);
+    const { stdin, lastFrame } = render(
+      <App {...SLASH_PROPS} onAgent={onAgent} runTurn={async () => completed} />,
+    );
+
+    await submit(stdin, "/agent write a haiku");
+    await flush();
+
+    expect(onAgent.mock.calls[0][0]).toBe("write a haiku");
+    expect(lastFrame()).toContain("subagent done: write a haiku");
+  });
+
+  it("reports an unavailable capability instead of doing nothing", async () => {
+    const { stdin, lastFrame } = render(<App {...SLASH_PROPS} runTurn={async () => completed} />);
+
+    await submit(stdin, "/compact");
+
+    expect(lastFrame()).toContain("not available");
+  });
+});
+
+describe("App slash autocomplete", () => {
+  const UP = "\x1b[A";
+  const DOWN = "\x1b[B";
+  const TAB = "\t";
+  const ESC = "\x1b";
+
+  it("shows the command menu while a slash command is being typed", async () => {
+    const { stdin, lastFrame } = renderApp(async () => completed);
+
+    await type(stdin, "/");
+
+    expect(lastFrame()).toContain("/model");
+    expect(lastFrame()).toContain("/usage");
+    expect(lastFrame()).toContain("navigate");
+  });
+
+  it("filters the menu by the typed prefix", async () => {
+    const { stdin, lastFrame } = renderApp(async () => completed);
+
+    await type(stdin, "/mo");
+
+    expect(lastFrame()).toContain("/model");
+    expect(lastFrame()).toContain("/mode");
+    expect(lastFrame()).not.toContain("/usage");
+  });
+
+  it("moves the highlight with the arrow keys", async () => {
+    const { stdin, lastFrame } = renderApp(async () => completed);
+
+    await type(stdin, "/mo");
+    expect(lastFrame()).toContain("› /model");
+
+    await type(stdin, DOWN);
+    expect(lastFrame()).toContain("› /mode");
+
+    await type(stdin, UP);
+    expect(lastFrame()).toContain("› /model");
+  });
+
+  it("completes the highlighted command on tab and closes the menu", async () => {
+    const { stdin, lastFrame } = renderApp(async () => completed);
+
+    await type(stdin, "/mo");
+    expect(lastFrame()).toContain("navigate");
+
+    await type(stdin, TAB);
+
+    // The prompt now holds the completed command (the trailing space it adds is
+    // trimmed in the rendered frame) and the menu -- its hint line -- is gone.
+    expect(lastFrame()).toContain("/model");
+    expect(lastFrame()).not.toContain("navigate");
+  });
+
+  it("runs the highlighted command on enter without touching the model", async () => {
+    const runTurn = vi.fn<TurnRunner>(async () => completed);
+    const { stdin, lastFrame } = renderApp(runTurn);
+
+    await type(stdin, "/he");
+    await type(stdin, ENTER);
+
+    expect(runTurn).not.toHaveBeenCalled();
+    expect(lastFrame()).toContain("commands:");
+  });
+
+  it("dismisses the menu on escape", async () => {
+    const { stdin, lastFrame } = renderApp(async () => completed);
+
+    await type(stdin, "/");
+    expect(lastFrame()).toContain("navigate");
+
+    stdin.write(ESC);
+    await new Promise((resolve) => setTimeout(resolve, 60));
+    expect(lastFrame()).not.toContain("navigate");
+  });
+
+  it("hides the menu once an argument is being typed", async () => {
+    const { stdin, lastFrame } = renderApp(async () => completed);
+
+    await type(stdin, "/model x");
+
+    expect(lastFrame()).not.toContain("navigate");
   });
 });

@@ -3,8 +3,9 @@ import { dispatchToolCalls } from "../../src/agent/tool-dispatcher.js";
 import { PermissionGate } from "../../src/permission/permission-gate.js";
 import type { Tool, ToolExecutionContext } from "../../src/tool/tool.js";
 import type { PermissionPolicy } from "../../src/permission/permission-policies.js";
+import { tmpdir } from "node:os";
 
-const context: ToolExecutionContext = { cwd: "/tmp" };
+const context: ToolExecutionContext = { cwd: tmpdir() };
 
 function makeTool(name: string, execute: Tool["execute"]): Tool {
   return { name, description: name, parameters: {}, execute };

@@ -13,6 +13,9 @@ async function initGitRepo(dir: string): Promise<void> {
   await execAsync("git init", { cwd: dir });
   await execAsync("git config user.email test@test.com", { cwd: dir });
   await execAsync("git config user.name Test", { cwd: dir });
+  // Keep line endings byte-identical across platforms so exact-content assertions
+  // hold on Windows, where git defaults core.autocrlf=true and would rewrite LF→CRLF.
+  await execAsync("git config core.autocrlf false", { cwd: dir });
   await writeFile(join(dir, "README.md"), "# Test\n", "utf8");
   await execAsync("git add -A && git commit -m init", { cwd: dir });
 }
@@ -34,7 +37,7 @@ describe("mergeWithVerification", () => {
     expect(handle).not.toBeNull();
 
     await writeFile(join(handle!.path, "feature.txt"), "hello\n", "utf8");
-    await execAsync("git add -A && git commit -m 'add feature'", { cwd: handle!.path });
+    await execAsync('git add -A && git commit -m "add feature"', { cwd: handle!.path });
 
     const result = await mergeWithVerification(repoDir, handle!, "true");
 
@@ -50,7 +53,7 @@ describe("mergeWithVerification", () => {
     expect(handle).not.toBeNull();
 
     await writeFile(join(handle!.path, "bad.txt"), "bad content\n", "utf8");
-    await execAsync("git add -A && git commit -m 'add bad file'", { cwd: handle!.path });
+    await execAsync('git add -A && git commit -m "add bad file"', { cwd: handle!.path });
 
     const result = await mergeWithVerification(repoDir, handle!, "false");
 
@@ -70,10 +73,10 @@ describe("mergeWithVerification", () => {
     expect(handle).not.toBeNull();
 
     await writeFile(join(handle!.path, "README.md"), "worktree version\n", "utf8");
-    await execAsync("git add -A && git commit -m 'wt change'", { cwd: handle!.path });
+    await execAsync('git add -A && git commit -m "wt change"', { cwd: handle!.path });
 
     await writeFile(join(repoDir, "README.md"), "main version\n", "utf8");
-    await execAsync("git add -A && git commit -m 'main change'", { cwd: repoDir });
+    await execAsync('git add -A && git commit -m "main change"', { cwd: repoDir });
 
     const result = await mergeWithVerification(repoDir, handle!);
 
@@ -89,7 +92,7 @@ describe("mergeWithVerification", () => {
     expect(handle).not.toBeNull();
 
     await writeFile(join(handle!.path, "simple.txt"), "data\n", "utf8");
-    await execAsync("git add -A && git commit -m 'add simple'", { cwd: handle!.path });
+    await execAsync('git add -A && git commit -m "add simple"', { cwd: handle!.path });
 
     const result = await mergeWithVerification(repoDir, handle!);
 
