@@ -42,9 +42,13 @@ export const askQuestionTool: Tool = {
     }
 
     if (!context.askQuestion) {
+      // No interactive channel (headless exec, or a consumer that wires no
+      // prompt). Returning the first option as if the user had chosen it makes
+      // the agent proceed on a fabricated decision. Surface an error instead so
+      // the model decides for itself and states its assumption.
       return {
-        output: `${options[0]} (defaulted — no user was available to answer)`,
-        isError: false,
+        output: `No user was available to answer: "${question}". Proceed using your own judgement and state the assumption you are making; do not treat any option as chosen.`,
+        isError: true,
       };
     }
 

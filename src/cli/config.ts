@@ -39,8 +39,20 @@ export interface ForgeConfig {
   oracleProvider?: ProviderConfig;
   editorProvider?: ProviderConfig;
   maxSteps?: number;
-  profiles?: { [name: string]: Partial<ForgeConfig> };
+  profiles?: { [name: string]: ConfigOverlay };
 }
+
+// A config layer that overlays onto a base: every field is optional, and the
+// provider objects are themselves partial so a profile or -c override can pin
+// just the model while inheriting the base's endpoint and key variable. This is
+// what mergeConfig, applyProfile, and the profiles map actually accept -- the
+// fully-resolved ForgeConfig requires a provider.type, an overlay does not.
+export type ConfigOverlay = Omit<Partial<ForgeConfig>, "provider" | "oracleProvider" | "editorProvider" | "profiles"> & {
+  provider?: Partial<ProviderConfig>;
+  oracleProvider?: Partial<ProviderConfig>;
+  editorProvider?: Partial<ProviderConfig>;
+  profiles?: { [name: string]: ConfigOverlay };
+};
 
 const CONFIG_FILENAME = "forge.config.json";
 const DEFAULT_PROVIDER: ProviderConfig = { type: "anthropic" };
@@ -76,7 +88,7 @@ function isPlainObject(value: unknown): value is Record<string, unknown> {
 // replace wholesale -- a layer listing servers means "these", not "these plus
 // whatever was configured below", which would otherwise spawn subprocesses the
 // overriding layer never asked for. Inputs are never mutated.
-export function mergeConfig(base: Partial<ForgeConfig>, overlay: Partial<ForgeConfig>): ForgeConfig {
+export function mergeConfig(base: ConfigOverlay, overlay: ConfigOverlay): ForgeConfig {
   const result: Record<string, unknown> = { ...base };
   for (const [key, value] of Object.entries(overlay)) {
     if (value === undefined) continue;
@@ -133,7 +145,7 @@ export function applyOverrides(config: ForgeConfig, overrides: string[]): ForgeC
       cursor = next;
     }
     cursor[path[path.length - 1]] = value;
-    result = mergeConfig(result, overlay as Partial<ForgeConfig>);
+    result = mergeConfig(result, overlay as ConfigOverlay);
   }
   return result;
 }

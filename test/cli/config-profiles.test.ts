@@ -8,7 +8,7 @@ import {
   loadConfig,
   mergeConfig,
 } from "../../src/cli/config.js";
-import type { ForgeConfig } from "../../src/cli/config.js";
+import type { ForgeConfig, ConfigOverlay } from "../../src/cli/config.js";
 
 describe("mergeConfig", () => {
   it("returns overlay values where they are set and base values elsewhere", () => {
@@ -30,7 +30,7 @@ describe("mergeConfig", () => {
     const base: Partial<ForgeConfig> = {
       provider: { type: "openai-compatible", baseUrl: "http://global.test/v1", apiKeyEnv: "GLOBAL_KEY", model: "base" },
     };
-    const overlay: Partial<ForgeConfig> = { provider: { model: "overlay" } };
+    const overlay: ConfigOverlay = { provider: { model: "overlay" } };
 
     const merged = mergeConfig(base, overlay);
 
@@ -56,7 +56,7 @@ describe("mergeConfig", () => {
 
   it("does not mutate either input", () => {
     const base: Partial<ForgeConfig> = { provider: { type: "anthropic", model: "base" } };
-    const overlay: Partial<ForgeConfig> = { provider: { model: "overlay" } };
+    const overlay: ConfigOverlay = { provider: { model: "overlay" } };
 
     mergeConfig(base, overlay);
 

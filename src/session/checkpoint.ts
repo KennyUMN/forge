@@ -1,5 +1,8 @@
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
+import { rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 
 const execFileAsync = promisify(execFile);
 
@@ -32,9 +35,16 @@ export async function createCheckpoint(
 
   const message = `forge-checkpoint: ${toolName} [${entryId}] session:${sessionId}`;
 
+  // Stage into a throwaway index via GIT_INDEX_FILE rather than the repo's real
+  // index, so snapshotting the working tree never disturbs whatever the user
+  // had staged. The previous `git add -A` + `git reset` pair silently blew away
+  // any pre-existing staged changes on every mutating tool call.
+  const tmpIndex = join(tmpdir(), `forge-checkpoint-index-${process.pid}-${process.hrtime.bigint()}`);
+  const env = { ...process.env, GIT_INDEX_FILE: tmpIndex };
+
   try {
-    await execFileAsync("git", ["add", "-A"], { cwd });
-    const { stdout: treeOut } = await execFileAsync("git", ["write-tree"], { cwd });
+    await execFileAsync("git", ["add", "-A"], { cwd, env });
+    const { stdout: treeOut } = await execFileAsync("git", ["write-tree"], { cwd, env });
     const tree = treeOut.trim();
 
     let parent: string | undefined;
@@ -48,11 +58,10 @@ export async function createCheckpoint(
     const commitArgs = ["commit-tree", tree];
     if (parent) commitArgs.push("-p", parent);
     commitArgs.push("-m", message);
-    const { stdout: commitOut } = await execFileAsync("git", commitArgs, { cwd });
+    const { stdout: commitOut } = await execFileAsync("git", commitArgs, { cwd, env });
     const commitHash = commitOut.trim();
 
     await execFileAsync("git", ["update-ref", `refs/heads/${SHADOW_BRANCH}`, commitHash], { cwd });
-    await execFileAsync("git", ["reset"], { cwd });
 
     return {
       commitHash,
@@ -63,6 +72,8 @@ export async function createCheckpoint(
     };
   } catch {
     return null;
+  } finally {
+    await rm(tmpIndex, { force: true }).catch(() => {});
   }
 }
 
@@ -70,7 +81,16 @@ export async function rewindToCheckpoint(
   cwd: string,
   checkpoint: Checkpoint,
 ): Promise<void> {
-  await execFileAsync("git", ["checkout", checkpoint.commitHash, "--", "."], { cwd });
+  // Restore the working tree to *exactly* the checkpoint snapshot. read-tree
+  // loads the snapshot into the index, checkout-index materialises it over the
+  // working tree, and clean removes whatever is now untracked -- i.e. files
+  // created after the checkpoint. A bare `git checkout <hash> -- .` restored
+  // modified files but left post-checkpoint additions behind, so undo was
+  // incomplete. clean without -x leaves .gitignored paths (node_modules, build
+  // output) untouched.
+  await execFileAsync("git", ["read-tree", checkpoint.commitHash], { cwd });
+  await execFileAsync("git", ["checkout-index", "-a", "-f"], { cwd });
+  await execFileAsync("git", ["clean", "-fd"], { cwd });
 }
 
 const CHECKPOINT_RE = /^forge-checkpoint: (.+?) \[(.+?)\] session:(.+)$/;

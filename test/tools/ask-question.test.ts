@@ -14,15 +14,16 @@ describe("askQuestionTool", () => {
     expect(result.output).toBe("Option B");
   });
 
-  it("returns the first option in headless mode (no callback)", async () => {
+  it("returns an error in headless mode when no user is available (no callback)", async () => {
     const result = await askQuestionTool.execute(
       { question: "Which framework?", options: ["React", "Vue", "Svelte"] },
       { cwd: "/tmp" },
     );
 
-    expect(result.isError).toBe(false);
-    expect(result.output).toContain("React");
-    expect(result.output).toContain("no user was available");
+    // No fabricated answer: the agent must decide for itself rather than being
+    // handed the first option as though a human had chosen it.
+    expect(result.isError).toBe(true);
+    expect(result.output).toContain("No user was available");
   });
 
   it("returns an error when question is missing", async () => {

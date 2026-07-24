@@ -3,7 +3,7 @@ import { once } from "node:events";
 import { execFileSync } from "node:child_process";
 import { isAbsolute, join, resolve } from "node:path";
 import { PermissionGate } from "../permission/permission-gate.js";
-import { DEFAULT_PERMISSION_POLICIES } from "../permission/permission-policies.js";
+import { policiesForMode } from "../permission/permission-policies.js";
 import { runTurn } from "../agent/turn-orchestrator.js";
 import { buildEnvironmentPreamble } from "../agent/preamble.js";
 import { buildToolRegistry } from "./build-registry.js";
@@ -29,12 +29,20 @@ import { discoverSkills, loadSkillBody, formatSkillsSection } from "../skills/sk
 import { discoverSlashCommands, expandSlashCommand } from "./slash-commands.js";
 import { discoverExtensions } from "../extension/extension-loader.js";
 import { createArchitectEditorProvider } from "../agent/architect-editor.js";
-import { runSubagent } from "../agent/subagent.js";
-import type { SubagentContext } from "../agent/subagent.js";
+import { buildAgentFns } from "./agent-wiring.js";
+import { loadHooks } from "../hooks/hooks.js";
+import { detectVerificationCommand } from "../agent/verification-gate.js";
+import { DEFAULT_SANDWICH } from "../agent/reasoning-sandwich.js";
 import type { BudgetConfig } from "../agent/budget.js";
+import type { VerificationConfig } from "../agent/verification-gate.js";
+import type { HookConfig } from "../hooks/hooks.js";
+import type { CheckpointFn } from "../agent/tool-dispatcher.js";
+import type { CompactionConfig } from "../agent/compaction.js";
+import type { ReasoningLevel, ReasoningSandwichConfig } from "../agent/reasoning-sandwich.js";
 import type { CliOptions } from "./args.js";
 import type { ForgeConfig } from "./config.js";
-import type { OracleFn, SubagentFn } from "../tool/tool.js";
+import type { McpServerConfig } from "../mcp/mcp-client.js";
+import type { OracleFn, AskQuestionPayload } from "../tool/tool.js";
 import type { ModelProvider } from "../provider/model-provider.js";
 import type { LspClient } from "../lsp/lsp-client.js";
 import type { SlashCommand } from "./slash-commands.js";
@@ -203,7 +211,15 @@ export async function main(argv: string[]): Promise<void> {
       })
     : baseProvider;
   const extensions = await discoverExtensions(cwd);
-  const registryHandle = await buildToolRegistry(config.mcpServers, extensions);
+  // Auto-detected .forge/mcp.json servers (project + global) are merged in
+  // alongside the config file's; an explicit config-file entry wins on a name
+  // clash so a committed config can override a discovered default.
+  const discoveredMcp = await discoverMcpServers(cwd);
+  const mcpServers = mergeMcpServers(discoveredMcp, config.mcpServers);
+  const registryHandle = await buildToolRegistry(mcpServers, extensions);
+
+  const hooks = await loadHooks(cwd);
+  const verification = await resolveVerification(options.verify, cwd);
 
   if (options.command === "mcp") {
     const { startMcpServer } = await import("../mcp/mcp-server.js");
@@ -263,21 +279,22 @@ export async function main(argv: string[]): Promise<void> {
   try {
     if (options.prompt !== undefined) {
       if (options.outputFormat || options.command === "exec") {
-        const gate = new PermissionGate(DEFAULT_PERMISSION_POLICIES, async () => options.autoApprove === true);
-        const subagent = createSubagentFn(provider, registryHandle.registry.getAll(), session, gate, systemPrompt, cwd);
+        const gate = new PermissionGate(policiesForMode(options.permissionMode ?? "ask"), async () => options.autoApprove === true);
+        const tools = registryHandle.registry.getAll();
+        const { subagent, parallelDispatch, bestOfN } = buildAgentFns({ provider, tools, session, gate, systemPrompt, cwd });
         await runExec({
           prompt: options.prompt,
           outputFormat: options.outputFormat ?? "text",
           systemPrompt,
           provider,
           session,
-          tools: registryHandle.registry.getAll(),
+          tools,
           gate,
-          toolContext: { cwd, oracle, subagent, loadSkill, lsp },
-          budget: buildBudgetConfig(options, config.provider.model),
+          toolContext: { cwd, oracle, subagent, parallelDispatch, bestOfN, loadSkill, lsp },
+          ...buildRunExtras(options, cwd, session, config.provider.model, verification, hooks),
         });
       } else {
-        await runOneShot(options, session, provider, registryHandle, cwd, systemPrompt, config.provider.model, oracle, loadSkill, lsp);
+        await runOneShot(options, session, provider, registryHandle, cwd, systemPrompt, config.provider.model, oracle, loadSkill, lsp, verification, hooks);
       }
       return;
     }
@@ -298,12 +315,14 @@ export async function main(argv: string[]): Promise<void> {
         permissionMode: options.permissionMode,
         oracle,
         lsp,
+        loadSkill,
+        ...buildRunExtras(options, cwd, session, config.provider.model, verification, hooks),
       });
       return;
     }
 
     console.log(`Session: ${session.sessionId}`);
-    await runInteractive(options, session, provider, registryHandle, cwd, systemPrompt, config.provider.model, oracle, loadSkill, slashCommands, lsp);
+    await runInteractive(options, session, provider, registryHandle, cwd, systemPrompt, config.provider.model, oracle, loadSkill, slashCommands, lsp, verification, hooks);
   } finally {
     await registryHandle.close();
     if (lsp) await lsp.shutdown().catch(() => {});
@@ -350,24 +369,63 @@ function createOracleFn(provider: ModelProvider): OracleFn {
   };
 }
 
-function createSubagentFn(
-  provider: ModelProvider,
-  tools: ReadonlyMap<string, import("../tool/tool.js").Tool>,
-  session: Session,
-  gate: PermissionGate,
-  systemPrompt: string,
+// Later sources win by name: the config file's servers overlay the
+// auto-discovered .forge/mcp.json ones, so a committed config can pin or
+// replace a discovered default without restating the rest.
+function mergeMcpServers(discovered: McpServerConfig[], configured: McpServerConfig[]): McpServerConfig[] {
+  const merged = new Map<string, McpServerConfig>();
+  for (const server of discovered) merged.set(server.name, server);
+  for (const server of configured) merged.set(server.name, server);
+  return [...merged.values()];
+}
+
+// Resolves --verify into a gate config: a string is an explicit command, `true`
+// auto-detects (npm test / tsc --noEmit), and an undetectable `true` warns and
+// leaves the gate off rather than silently doing nothing.
+async function resolveVerification(verify: string | boolean | undefined, cwd: string): Promise<VerificationConfig | undefined> {
+  if (verify === undefined || verify === false) return undefined;
+  if (typeof verify === "string") return { command: verify };
+  const detected = await detectVerificationCommand(cwd);
+  if (!detected) {
+    console.error("Warning: --verify could not auto-detect a command (no package.json test script or tsconfig.json). Verification gate is off.");
+    return undefined;
+  }
+  return { command: detected };
+}
+
+interface RunExtras {
+  budget?: BudgetConfig;
+  compaction: CompactionConfig;
+  verification?: VerificationConfig;
+  hooks: HookConfig[];
+  reasoningLevel?: ReasoningLevel;
+  reasoningSandwich?: ReasoningSandwichConfig;
+  checkpoint: CheckpointFn;
+}
+
+// The run-loop features that every entrypoint shares: hard budget cap, masking
+// compaction (on by default; a no-op below the token threshold), the optional
+// verification gate, project hooks, the reasoning dial, and a checkpoint before
+// every mutating tool. Centralised so exec, -p, the interactive loop, and the
+// TUI all get the same durability guarantees rather than four divergent subsets.
+function buildRunExtras(
+  options: CliOptions,
   cwd: string,
-): SubagentFn {
-  return async (task, config) => {
-    const context: SubagentContext = {
-      parentProvider: provider,
-      parentTools: tools,
-      parentSession: session,
-      parentGate: gate,
-      systemPrompt,
-      cwd,
-    };
-    return runSubagent(task, config, context);
+  session: Session,
+  model: string | undefined,
+  verification: VerificationConfig | undefined,
+  hooks: HookConfig[],
+): RunExtras {
+  return {
+    budget: buildBudgetConfig(options, model),
+    compaction: {},
+    verification,
+    hooks,
+    reasoningLevel: options.reasoning,
+    reasoningSandwich: options.reasoningSandwich === false ? undefined : DEFAULT_SANDWICH,
+    checkpoint: async (toolName, entryId) => {
+      await createCheckpoint(cwd, session.sessionId, entryId, toolName);
+    },
   };
 }
 
@@ -387,21 +445,21 @@ async function runOneShot(
   oracle?: OracleFn,
   loadSkill?: (name: string) => Promise<string>,
   lsp?: LspClient,
+  verification?: VerificationConfig,
+  hooks: HookConfig[] = [],
 ): Promise<void> {
-  const gate = new PermissionGate(DEFAULT_PERMISSION_POLICIES, async () => options.autoApprove === true);
-  const subagent = createSubagentFn(provider, registryHandle.registry.getAll(), session, gate, systemPrompt, cwd);
+  const gate = new PermissionGate(policiesForMode(options.permissionMode ?? "ask"), async () => options.autoApprove === true);
+  const tools = registryHandle.registry.getAll();
+  const { subagent, parallelDispatch, bestOfN } = buildAgentFns({ provider, tools, session, gate, systemPrompt, cwd });
 
   const result = await runTurn(options.prompt as string, {
     provider,
     session,
-    tools: registryHandle.registry.getAll(),
+    tools,
     gate,
     systemPrompt,
-    toolContext: { cwd, oracle, subagent, loadSkill, lsp },
-    budget: buildBudgetConfig(options, model),
-    checkpoint: async (toolName, entryId) => {
-      await createCheckpoint(cwd, session.sessionId, entryId, toolName);
-    },
+    toolContext: { cwd, oracle, subagent, parallelDispatch, bestOfN, loadSkill, lsp },
+    ...buildRunExtras(options, cwd, session, model, verification, hooks),
     // Only assistant text on stdout in one-shot mode: the point of -p is that
     // its output can be piped, and tool chatter would corrupt whatever is
     // reading it.
@@ -432,6 +490,8 @@ async function runInteractive(
   loadSkill?: (name: string) => Promise<string>,
   slashCommands?: SlashCommand[],
   lsp?: LspClient,
+  verification?: VerificationConfig,
+  hooks: HookConfig[] = [],
 ): Promise<void> {
   const rl = createInterface({ input: process.stdin, output: process.stdout });
 
@@ -456,9 +516,26 @@ async function runInteractive(
   // a permission prompt pending at stdin EOF resolves to "denied" instead of
   // hanging forever the same way the loop's own rl.question() call would.
   const ask = options.autoApprove ? async () => true : createSharedAskFn(rl, closed);
-  const gate = new PermissionGate(DEFAULT_PERMISSION_POLICIES, ask);
-  const subagent = createSubagentFn(provider, registryHandle.registry.getAll(), session, gate, systemPrompt, cwd);
+  const gate = new PermissionGate(policiesForMode(options.permissionMode ?? "ask"), ask);
+  const tools = registryHandle.registry.getAll();
   const render = createRenderer();
+
+  // A real answer for ask_question in the interactive loop: present the numbered
+  // options and read one back, so the agent gets a human decision rather than
+  // silently defaulting to the first option.
+  const askQuestion = async (payload: AskQuestionPayload): Promise<string> => {
+    const lines = [payload.question];
+    if (payload.context) lines.push(payload.context);
+    payload.options.forEach((option, i) => lines.push(`  ${i + 1}) ${option}`));
+    process.stdout.write(lines.join("\n") + "\n");
+    const answer = await questionOrNull(rl, closed, "choose> ");
+    if (answer === null) return payload.options[0];
+    const trimmedAnswer = answer.trim();
+    const idx = Number(trimmedAnswer);
+    if (Number.isInteger(idx) && idx >= 1 && idx <= payload.options.length) return payload.options[idx - 1];
+    const matched = payload.options.find((o) => o.toLowerCase() === trimmedAnswer.toLowerCase());
+    return matched ?? payload.options[0];
+  };
 
   try {
     while (true) {
@@ -482,19 +559,22 @@ async function runInteractive(
       // behaving as it did.
       process.on("SIGINT", onSigint);
 
+      // Built per turn so the subagent primitives see this turn's abort signal;
+      // a Ctrl-C then reaches a running subagent, not just the top-level loop.
+      const { subagent, parallelDispatch, bestOfN } = buildAgentFns({
+        provider, tools, session, gate, systemPrompt, cwd, signal: controller.signal,
+      });
+
       let result;
       try {
         result = await runTurn(promptText, {
           provider,
           session,
-          tools: registryHandle.registry.getAll(),
+          tools,
           gate,
           systemPrompt,
-          toolContext: { cwd, oracle, subagent, loadSkill, lsp },
-          budget: buildBudgetConfig(options, model),
-          checkpoint: async (toolName, entryId) => {
-            await createCheckpoint(cwd, session.sessionId, entryId, toolName);
-          },
+          toolContext: { cwd, oracle, subagent, parallelDispatch, bestOfN, loadSkill, lsp, askQuestion },
+          ...buildRunExtras(options, cwd, session, model, verification, hooks),
           onEvent: render,
           signal: controller.signal,
         });

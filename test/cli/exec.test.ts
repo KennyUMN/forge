@@ -6,6 +6,7 @@ import { runExec } from "../../src/cli/exec.js";
 import { SessionStore } from "../../src/session/session-store.js";
 import { PermissionGate } from "../../src/permission/permission-gate.js";
 import { autoAllowReadOnlyPolicy, askBeforeWriteOrBashPolicy } from "../../src/permission/permission-policies.js";
+import type { MockInstance } from "vitest";
 import type { Tool } from "../../src/tool/tool.js";
 import type { ModelProvider, StreamContext } from "../../src/provider/model-provider.js";
 import type { StreamEvent } from "../../src/types/message.js";
@@ -29,8 +30,8 @@ function makeTool(name: string, execute: Tool["execute"]): Tool {
 }
 
 let dir: string;
-let stdoutSpy: ReturnType<typeof vi.spyOn>;
-let stderrSpy: ReturnType<typeof vi.spyOn>;
+let stdoutSpy: MockInstance<typeof process.stdout.write>;
+let stderrSpy: MockInstance<typeof process.stderr.write>;
 
 beforeEach(async () => {
   dir = await mkdtemp(join(tmpdir(), "forge-exec-"));
@@ -56,7 +57,6 @@ async function makeExecOptions(overrides: Partial<ExecOptions> & { provider: Mod
     prompt: "hello",
     outputFormat: "text",
     systemPrompt: "You are a test assistant.",
-    provider: overrides.provider,
     session,
     tools: new Map(),
     gate,

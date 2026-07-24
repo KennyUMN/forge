@@ -5,7 +5,7 @@ import type { TurnEventHandler } from "./turn-events.js";
 import type { HookConfig } from "../hooks/hooks.js";
 import { checkDoomLoop } from "./doom-loop.js";
 import { taintToolOutput } from "../tool/taint.js";
-import { boundOutput } from "../tool/output-bounds.js";
+import { boundOutputBytes } from "../tool/output-bounds.js";
 import { matchesHook, runHook } from "../hooks/hooks.js";
 
 export interface DispatchOutcome {
@@ -85,11 +85,13 @@ export async function dispatchToolCalls(
 
     try {
       const executed = await tool.execute(call.input, context);
-      let output = executed.output;
-      if (!executed.isError) {
-        output = taintToolOutput(output, call.name, call.input);
-        output = boundOutput(output);
-      }
+      // Taint and bound BOTH success and error output: an injected instruction
+      // or a runaway dump can arrive on stderr just as easily as on stdout, so
+      // an error result must not bypass the untrusted-content wrapper or the
+      // byte/line cap. boundOutputBytes also guards a single newline-free blob
+      // that the line-based cap alone would let through.
+      let output = taintToolOutput(executed.output, call.name, call.input);
+      output = boundOutputBytes(output);
       if (verdict.action === "steer") {
         output = `${output}\n\n[system note: ${verdict.message}]`;
       }

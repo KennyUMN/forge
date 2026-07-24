@@ -17,6 +17,12 @@ export interface ExecOptions {
   toolContext: TurnOrchestratorOptions["toolContext"];
   maxSteps?: number;
   budget?: TurnOrchestratorOptions["budget"];
+  compaction?: TurnOrchestratorOptions["compaction"];
+  verification?: TurnOrchestratorOptions["verification"];
+  checkpoint?: TurnOrchestratorOptions["checkpoint"];
+  hooks?: TurnOrchestratorOptions["hooks"];
+  reasoningLevel?: TurnOrchestratorOptions["reasoningLevel"];
+  reasoningSandwich?: TurnOrchestratorOptions["reasoningSandwich"];
 }
 
 function emitLine(obj: unknown): void {
@@ -75,6 +81,12 @@ export async function runExec(options: ExecOptions): Promise<void> {
     toolContext: options.toolContext,
     maxSteps: options.maxSteps,
     budget: options.budget,
+    compaction: options.compaction,
+    verification: options.verification,
+    checkpoint: options.checkpoint,
+    hooks: options.hooks,
+    reasoningLevel: options.reasoningLevel,
+    reasoningSandwich: options.reasoningSandwich,
     onEvent,
   });
 

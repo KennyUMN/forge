@@ -33,6 +33,9 @@ export interface CliOptions {
   tui?: boolean;
   reasoning?: "low" | "medium" | "high";
   reasoningSandwich?: boolean;
+  // Pre-completion verification gate. A string is an explicit command; `true`
+  // means auto-detect (npm test / tsc --noEmit). Undefined leaves the gate off.
+  verify?: string | boolean;
   rewindCount?: number;
   exportSessionId?: string;
 }
@@ -90,6 +93,8 @@ OPTIONS
       --reasoning <level>         uniform thinking budget: low | medium | high
       --reasoning-sandwich        enable per-step reasoning dial (default: on)
       --no-reasoning-sandwich     disable per-step reasoning dial
+      --verify [command]          block "done" until command passes; a bare
+                                  --verify auto-detects (npm test / tsc --noEmit)
       --tui / --no-tui            force the full-screen UI on or off
                                   (default: on when stdin and stdout are a tty)
   -h, --help                      show this help
@@ -287,6 +292,18 @@ export function parseCliArgs(argv: string[]): CliOptions {
       case "--no-reasoning-sandwich":
         options.reasoningSandwich = false;
         break;
+      case "--verify": {
+        // Optional value: `--verify "npm test"` pins a command; a bare
+        // `--verify` (next token is another flag or end of args) auto-detects.
+        const next = argv[i + 1];
+        if (next !== undefined && !next.startsWith("-")) {
+          options.verify = next;
+          i++;
+        } else {
+          options.verify = true;
+        }
+        break;
+      }
       default:
         if (options.command === "exec" && !arg.startsWith("-")) {
           options.prompt = options.prompt ? `${options.prompt} ${arg}` : arg;

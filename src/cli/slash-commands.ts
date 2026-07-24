@@ -56,7 +56,10 @@ export async function expandSlashCommand(input: string, commands: SlashCommand[]
   const command = commands.find((c) => c.name === commandName);
   if (!command) return input;
 
-  let expanded = command.template.replace(/\$ARGUMENTS/g, args);
+  // Function replacers throughout: a literal "$1", "$&", or "$$" in the
+  // arguments, a file's contents, or a command's output must be inserted
+  // verbatim, not interpreted as a String.replace substitution pattern.
+  let expanded = command.template.replace(/\$ARGUMENTS/g, () => args);
 
   const filePattern = /@([\w./-]+)/g;
   let fileMatch: RegExpExecArray | null;
@@ -72,7 +75,7 @@ export async function expandSlashCommand(input: string, commands: SlashCommand[]
     fileReplacements.push({ match: fileMatch[0], content });
   }
   for (const { match, content } of fileReplacements) {
-    expanded = expanded.replace(match, content);
+    expanded = expanded.replace(match, () => content);
   }
 
   const cmdPattern = /!`([^`]+)`/g;
@@ -89,7 +92,7 @@ export async function expandSlashCommand(input: string, commands: SlashCommand[]
     cmdReplacements.push({ match: cmdMatch[0], output });
   }
   for (const { match, output } of cmdReplacements) {
-    expanded = expanded.replace(match, output);
+    expanded = expanded.replace(match, () => output);
   }
 
   return expanded;

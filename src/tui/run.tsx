@@ -4,14 +4,19 @@ import { findGitBranch } from "./git.js";
 import { PermissionGate } from "../permission/permission-gate.js";
 import { policiesForMode } from "../permission/permission-policies.js";
 import { runTurn } from "../agent/turn-orchestrator.js";
-import { runSubagent } from "../agent/subagent.js";
-import type { SubagentContext } from "../agent/subagent.js";
+import { buildAgentFns } from "../cli/agent-wiring.js";
 import type { TurnRunner } from "./app.js";
 import type { PermissionMode } from "../permission/permission-policies.js";
 import type { ModelProvider } from "../provider/model-provider.js";
 import type { SessionStore } from "../session/session-store.js";
-import type { Tool, OracleFn, SubagentFn } from "../tool/tool.js";
+import type { Tool, OracleFn } from "../tool/tool.js";
 import type { LspClient } from "../lsp/lsp-client.js";
+import type { BudgetConfig } from "../agent/budget.js";
+import type { CompactionConfig } from "../agent/compaction.js";
+import type { VerificationConfig } from "../agent/verification-gate.js";
+import type { HookConfig } from "../hooks/hooks.js";
+import type { CheckpointFn } from "../agent/tool-dispatcher.js";
+import type { ReasoningLevel, ReasoningSandwichConfig } from "../agent/reasoning-sandwich.js";
 
 // Used when the configured provider does not say. Deliberately conservative:
 // an over-large denominator makes the bar read comfortable right up to the
@@ -31,6 +36,14 @@ export interface RunTuiOptions {
   permissionMode?: PermissionMode;
   oracle?: OracleFn;
   lsp?: LspClient;
+  loadSkill?: (name: string) => Promise<string>;
+  budget?: BudgetConfig;
+  compaction?: CompactionConfig;
+  verification?: VerificationConfig;
+  checkpoint?: CheckpointFn;
+  hooks?: HookConfig[];
+  reasoningLevel?: ReasoningLevel;
+  reasoningSandwich?: ReasoningSandwichConfig;
 }
 
 export async function runTui(options: RunTuiOptions): Promise<void> {
@@ -39,25 +52,38 @@ export async function runTui(options: RunTuiOptions): Promise<void> {
   // it enforces can have changed since the last turn.
   const runner: TurnRunner = async ({ text, mode, onEvent, signal, ask }) => {
     const gate = new PermissionGate(policiesForMode(mode), options.autoApprove ? async () => true : ask);
-    const subagent: SubagentFn = async (task, config) => {
-      const ctx: SubagentContext = {
-        parentProvider: options.provider,
-        parentTools: options.tools,
-        parentSession: options.session,
-        parentGate: gate,
-        systemPrompt: options.systemPrompt,
-        cwd: options.cwd,
-        signal,
-      };
-      return runSubagent(task, config, ctx);
-    };
+    const { subagent, parallelDispatch, bestOfN } = buildAgentFns({
+      provider: options.provider,
+      tools: options.tools,
+      session: options.session,
+      gate,
+      systemPrompt: options.systemPrompt,
+      cwd: options.cwd,
+      signal,
+    });
+    const checkpoint = options.checkpoint;
     return runTurn(text, {
       provider: options.provider,
       session: options.session,
       tools: options.tools,
       gate,
       systemPrompt: options.systemPrompt,
-      toolContext: { cwd: options.cwd, oracle: options.oracle, subagent, lsp: options.lsp },
+      toolContext: {
+        cwd: options.cwd,
+        oracle: options.oracle,
+        subagent,
+        parallelDispatch,
+        bestOfN,
+        loadSkill: options.loadSkill,
+        lsp: options.lsp,
+      },
+      budget: options.budget,
+      compaction: options.compaction,
+      verification: options.verification,
+      checkpoint,
+      hooks: options.hooks,
+      reasoningLevel: options.reasoningLevel,
+      reasoningSandwich: options.reasoningSandwich,
       onEvent,
       signal,
     });
