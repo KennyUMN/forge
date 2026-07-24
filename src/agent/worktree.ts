@@ -14,7 +14,10 @@ export async function createWorktree(
   cwd: string,
   name: string,
 ): Promise<WorktreeHandle | null> {
-  const worktreePath = join(cwd, ".forge", "worktrees", name);
+  // Forward slashes on every platform: git for Windows accepts them, Node's
+  // child_process honours them as a cwd, and it keeps handle.path stable across
+  // OSes (win32 join() would otherwise emit backslashes only on Windows).
+  const worktreePath = join(cwd, ".forge", "worktrees", name).replace(/\\/g, "/");
   const branch = `forge/${name}`;
 
   try {

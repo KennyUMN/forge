@@ -316,6 +316,10 @@ export async function main(argv: string[]): Promise<void> {
         oracle,
         lsp,
         loadSkill,
+        models: listModels().map((m) => m.id),
+        // /model rebuilds the base provider with the chosen model. A configured
+        // architect/editor composite collapses to that single model on switch.
+        buildProviderForModel: (model) => buildProvider({ ...config.provider, model }),
         ...buildRunExtras(options, cwd, session, config.provider.model, verification, hooks),
       });
       return;

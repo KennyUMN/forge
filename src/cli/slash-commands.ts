@@ -1,6 +1,7 @@
 import { execFile } from "node:child_process";
 import { readFile, readdir } from "node:fs/promises";
 import { basename, join } from "node:path";
+import { resolveShell } from "../tools/shell.js";
 
 export interface SlashCommand {
   name: string;
@@ -35,7 +36,7 @@ export async function discoverSlashCommands(cwd: string): Promise<SlashCommand[]
 
 function runShellCommand(command: string, cwd: string): Promise<string> {
   return new Promise((resolve, reject) => {
-    execFile("/bin/sh", ["-c", command], { cwd, maxBuffer: 1024 * 1024 }, (err, stdout) => {
+    execFile(resolveShell() ?? "/bin/sh", ["-c", command], { cwd, maxBuffer: 1024 * 1024 }, (err, stdout) => {
       if (err) {
         reject(err);
         return;

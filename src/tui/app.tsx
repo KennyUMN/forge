@@ -5,6 +5,7 @@ import {
   Banner,
   Divider,
   PermissionPrompt,
+  SlashSuggestions,
   StatusBar,
   ThinkingView,
   TranscriptRow,
@@ -19,6 +20,8 @@ import {
 } from "./transcript-model.js";
 import { nextPermissionMode } from "../permission/permission-policies.js";
 import type { PermissionMode } from "../permission/permission-policies.js";
+import { isSlashInput, runSlashCommand, SESSION_COMMANDS } from "./session-commands.js";
+import type { SlashContext, SlashEffect } from "./session-commands.js";
 import type { TranscriptState } from "./transcript-model.js";
 import type { TurnEvent } from "../agent/turn-events.js";
 import type { ToolCallRequest } from "../types/tool-call.js";
@@ -31,6 +34,7 @@ const SHORTCUTS = [
   "shift+tab  cycle permission mode (ask / accept-edits / auto)",
   "ctrl-c     interrupt the running turn, or quit when idle",
   "?          toggle this help (when the prompt is empty)",
+  "/help      list in-session commands (/model, /usage, /compact, ...)",
   "/exit      quit",
 ];
 
@@ -53,6 +57,13 @@ export interface AppProps {
   contextWindow: number;
   initialMode?: PermissionMode;
   runTurn: TurnRunner;
+  // In-session slash-command capabilities. Each is optional: when absent, the
+  // matching command degrades to an honest "not available" line rather than a
+  // silent no-op (the App reports the capability to the pure command handler).
+  models?: readonly string[];
+  onModelChange?: (model: string) => Promise<string>;
+  onCompact?: () => Promise<string>;
+  onAgent?: (task: string, signal: AbortSignal) => Promise<string>;
 }
 
 interface PendingPermission {
@@ -63,21 +74,35 @@ interface PendingPermission {
 export function App({
   version,
   provider,
-  model,
+  model: initialModel,
   cwd,
   branch,
   contextWindow,
   initialMode = "ask",
   runTurn,
+  models = [],
+  onModelChange,
+  onCompact,
+  onAgent,
 }: AppProps): ReactElement {
   const { exit } = useApp();
   const [transcript, setTranscript] = useState<TranscriptState>(EMPTY_TRANSCRIPT);
   const [input, setInput] = useState("");
   const [busy, setBusy] = useState(false);
+  // The active model is state, not just the prop: /model switches it live and
+  // the banner/status bar must follow.
+  const [model, setModel] = useState(initialModel);
   const [pending, setPending] = useState<PendingPermission | null>(null);
   const [frame, setFrame] = useState(0);
   const [mode, setMode] = useState<PermissionMode>(initialMode);
   const [showHelp, setShowHelp] = useState(false);
+  // Slash-command autocomplete: which suggestion is highlighted, and whether
+  // Esc has dismissed the menu for the current input.
+  const [selectedIndex, setSelectedIndex] = useState(0);
+  const [menuDismissed, setMenuDismissed] = useState(false);
+  // Lines entered while a turn is running wait here and are sent one at a time
+  // once it finishes -- the message queue, like Claude Code's.
+  const [queue, setQueue] = useState<string[]>([]);
   // Undefined until a provider reports a count -- shown as unknown rather than
   // as zero, since several compatible servers never report usage at all.
   const [usedTokens, setUsedTokens] = useState<number | undefined>(undefined);
@@ -104,6 +129,13 @@ export function App({
     const timer = setInterval(() => setFrame((current) => current + 1), SPINNER_INTERVAL_MS);
     return () => clearInterval(timer);
   }, [busy]);
+
+  // Editing the prompt re-opens the menu (undoing an earlier Esc) and moves the
+  // highlight back to the top, so the selection never points past a shrunk list.
+  useEffect(() => {
+    setSelectedIndex(0);
+    setMenuDismissed(false);
+  }, [input]);
 
   const ask = useCallback(
     (call: ToolCallRequest) =>
@@ -164,6 +196,129 @@ export function App({
     [runTurn, ask],
   );
 
+  const appendNotices = useCallback((lines: string[]) => {
+    if (lines.length === 0) return;
+    setTranscript((state) => lines.reduce((acc, line) => appendNotice(acc, line), state));
+  }, []);
+
+  // Runs a /agent task as its own interruptible, busy turn, mirroring submit()'s
+  // lifecycle so Ctrl-C and the spinner behave the same as for a normal turn.
+  const runAgentTask = useCallback(
+    async (task: string) => {
+      if (!onAgent) return;
+      setBusy(true);
+      const controller = new AbortController();
+      abortRef.current = controller;
+      try {
+        const summary = await onAgent(task, controller.signal);
+        setTranscript((state) => appendNotice(state, summary));
+      } catch (err) {
+        const message = controller.signal.aborted ? "interrupted" : `agent error: ${errorText(err)}`;
+        setTranscript((state) => appendNotice(state, message));
+      } finally {
+        setTranscript((state) => {
+          setSettledCount(state.items.length);
+          return state;
+        });
+        abortRef.current = null;
+        setBusy(false);
+      }
+    },
+    [onAgent],
+  );
+
+  const applyEffect = useCallback(
+    async (effect: SlashEffect) => {
+      switch (effect.kind) {
+        case "none":
+          return;
+        case "exit":
+          exit();
+          return;
+        case "clear":
+          setTranscript(EMPTY_TRANSCRIPT);
+          setSettledCount(0);
+          return;
+        case "set_mode":
+          setMode(effect.mode);
+          return;
+        case "switch_model":
+          if (!onModelChange) return;
+          try {
+            const msg = await onModelChange(effect.model);
+            setModel(effect.model);
+            setTranscript((state) => appendNotice(state, msg));
+          } catch (err) {
+            setTranscript((state) => appendNotice(state, `model switch failed: ${errorText(err)}`));
+          }
+          return;
+        case "compact":
+          if (!onCompact) return;
+          try {
+            const report = await onCompact();
+            setTranscript((state) => appendNotice(state, report));
+          } catch (err) {
+            setTranscript((state) => appendNotice(state, `compaction failed: ${errorText(err)}`));
+          }
+          return;
+        case "run_agent":
+          await runAgentTask(effect.task);
+          return;
+      }
+    },
+    [exit, onModelChange, onCompact, runAgentTask],
+  );
+
+  const handleSlash = useCallback(
+    async (text: string) => {
+      const slashCtx: SlashContext = {
+        provider,
+        model,
+        cwd,
+        branch,
+        mode: modeRef.current,
+        usedTokens,
+        contextWindow,
+        models,
+        canSwitchModel: Boolean(onModelChange),
+        canCompact: Boolean(onCompact),
+        canRunAgent: Boolean(onAgent),
+      };
+      const result = runSlashCommand(text, slashCtx);
+      appendNotices(result.lines);
+      await applyEffect(result.effect);
+    },
+    [provider, model, cwd, branch, usedTokens, contextWindow, models, onModelChange, onCompact, onAgent, appendNotices, applyEffect],
+  );
+
+  // A slash command runs locally; anything else is a turn. Both the prompt and
+  // the queue drain go through here so queued lines behave exactly as if typed.
+  const processInput = useCallback(
+    (text: string) => {
+      if (isSlashInput(text)) void handleSlash(text);
+      else void submit(text);
+    },
+    [handleSlash, submit],
+  );
+
+  // Drain one queued line whenever the loop goes idle. submit()/handleSlash set
+  // busy synchronously, so a message that starts a turn re-blocks the drain
+  // until it finishes; local slash commands fall straight through to the next.
+  useEffect(() => {
+    if (busy || pending || queue.length === 0) return;
+    const next = queue[0];
+    setQueue((q) => q.slice(1));
+    processInput(next);
+  }, [busy, pending, queue, processInput]);
+
+  // Autocomplete is offered only while the prompt is a bare command token -- a
+  // leading slash with no space yet. Once an argument is being typed (/model g)
+  // the menu closes and Enter/Tab go back to their normal behaviour.
+  const slashQuery = input.startsWith("/") && !input.includes(" ") ? input.slice(1).toLowerCase() : null;
+  const suggestions = slashQuery === null ? [] : SESSION_COMMANDS.filter((cmd) => cmd.name.startsWith(slashQuery));
+  const menuOpen = !busy && !pending && !menuDismissed && suggestions.length > 0;
+  const activeIndex = suggestions.length > 0 ? Math.min(selectedIndex, suggestions.length - 1) : 0;
+
   useInput((char, key) => {
     // Ctrl-C interrupts the turn rather than quitting, matching every other
     // agent CLI; it only exits when there is nothing to interrupt.
@@ -189,33 +344,59 @@ export function App({
       return;
     }
 
-    // Keystrokes during a turn are dropped rather than buffered: text typed
-    // while the model is mid-response almost always belongs to the next
-    // prompt, and queueing it would silently submit something the user has
-    // forgotten they typed.
-    if (busy) return;
+    // The autocomplete menu owns the arrows, Tab, Esc and Enter while it is
+    // open. Other keys (letters, backspace) fall through so the query keeps
+    // filtering the list. (Never open while busy, so this is skipped mid-turn.)
+    if (menuOpen) {
+      if (key.upArrow) {
+        setSelectedIndex((i) => (i - 1 + suggestions.length) % suggestions.length);
+        return;
+      }
+      if (key.downArrow) {
+        setSelectedIndex((i) => (i + 1) % suggestions.length);
+        return;
+      }
+      if (key.escape) {
+        setMenuDismissed(true);
+        return;
+      }
+      // Tab fills the prompt with the highlighted command (plus a space) so the
+      // user can type arguments; Enter runs it straight away.
+      if (key.tab && !key.shift) {
+        setInput(`/${suggestions[activeIndex].name} `);
+        return;
+      }
+      if (key.return) {
+        setInput("");
+        void handleSlash(`/${suggestions[activeIndex].name}`);
+        return;
+      }
+    }
 
     if (key.return) {
       const text = input.trim();
       setInput("");
-      if (text === "/exit") {
-        exit();
+      if (!text) return;
+      // Mid-turn the line joins the queue instead of being dropped; it runs
+      // once the current turn (and anything ahead of it) finishes.
+      if (busy) {
+        setQueue((q) => [...q, text]);
         return;
       }
-      if (text) void submit(text);
+      processInput(text);
       return;
     }
     if (key.delete || key.backspace) {
       setInput((current) => current.slice(0, -1));
       return;
     }
-    // Only when the prompt is empty, so a "?" typed inside a question reaches
-    // the model instead of opening the help.
-    if (char === "?" && input === "") {
+    // Only when the prompt is empty and idle, so a "?" typed inside a question
+    // or while a turn runs reaches the input instead of opening the help.
+    if (char === "?" && input === "" && !busy) {
       setShowHelp((current) => !current);
       return;
     }
-    if (char && !key.ctrl && !key.meta && !key.escape) {
+    if (char && !key.ctrl && !key.meta && !key.escape && !key.tab && !key.return) {
       setInput((current) => current + char);
     }
   });
@@ -259,9 +440,22 @@ export function App({
             {PROMPT_CHEVRON}{" "}
           </Text>
           <Text>{input}</Text>
-          {!busy && <Text inverse> </Text>}
+          {/* Cursor shows whenever input is accepted -- including mid-turn, now
+              that typing is queued rather than dropped. */}
+          <Text inverse> </Text>
         </Box>
       )}
+      {queue.length > 0 && (
+        <Box flexDirection="column" marginLeft={2}>
+          {queue.map((text, index) => (
+            <Text key={index} dimColor>
+              {"↳ queued: "}
+              {text}
+            </Text>
+          ))}
+        </Box>
+      )}
+      {menuOpen && <SlashSuggestions items={suggestions} selectedIndex={activeIndex} />}
       <Divider />
       <StatusBar
         mode={mode}
